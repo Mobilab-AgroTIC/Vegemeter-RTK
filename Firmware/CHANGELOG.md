@@ -6,6 +6,25 @@ Le détail de la trame MQTT de chaque version est dans
 Légende : 🔴 = change la trame MQTT (adaptation serveur nécessaire) ·
 🟠 = même trame, comportement d'envoi différent.
 
+## [2.1.0] – 2025-11-04
+
+### Trame MQTT
+- 🔴 **Nouveau format, incompatible avec 2.0.0** : trame imbriquée
+  `{ sensor_id, ts, delta_gnss_spectro_ms, message_id, gnss{…}, spectro{…} }`.
+- 🔴 Position transmise en unités u-blox brutes : `lat`/`lon` en 1e-7 degré,
+  `hMSL` en mm (au lieu de degrés et mètres).
+- 🔴 Nouveaux champs : `gSpeed` (mm/s), date GNSS détaillée (`gnss_date`),
+  horodatages internes GNSS et spectro.
+- Champs `hdop` et `fix` présents mais jamais renseignés (toujours 0).
+- 🟠 Publication en QoS 1 (AsyncMqttClient) au lieu de QoS 0.
+
+### Autres changements
+- Réécriture complète sur FreeRTOS : tâches GNSS, spectro, fusion, MQTT, NTRIP,
+  GGA et santé, communiquant par files.
+- Configuration centralisée dans `src/common/config.h`.
+- Liaison F9P à 460 800 bauds ; trame GGA reconstruite depuis UBX (GNGGA) pour le caster.
+- WiFi et MQTT asynchrones avec reconnexion sur événement.
+
 ## [2.0.0] – 2025-03-28
 
 Première version publiée.
