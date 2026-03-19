@@ -26,6 +26,12 @@ Un bouton sur le côté du boitier permet de labelliser les données (pour ensui
 
 Basculez le bouton dans la **position 0 "Garbage"** pour le démarrage
 
+<img 
+  src="https://github.com/user-attachments/assets/34d80394-0675-4680-b171-cd83fbb5d11b"
+  alt="vegemetreRTK_EnvoieDonnees"
+  style="width: 50%; height: auto;"
+/>
+
 <h2>4. Envoi et stockage des données</h2>
 
 Le stockage des données se fait en ligne sur la console Mobilab. Les données sont donc envoyées en temps réel et cela peut rapidement collecter beaucoup de données inutiles. Pour cela nous vous recommandons d'utiliser le bouton **"envoi de données"** pour activer ou désactiver l'envoi (et donc le stockage) des données.
@@ -82,6 +88,11 @@ Les deux fenêtre suivantes servent à s'assurer des conditions d'acquisition sp
 - La fenêtre **"Button state"** affiche en temps réel l'état de votre bouton de labellisation (rafraichissement toutes les 5 secondes). *Avant de faire une acquisition on vous recommande de tester les 3 positions et s'assurer que cela se met bien à jour dans l'interface de visualisation*
 - La fenêtre **"NDVI"** affiche le NDVI. On peut ainsi rapidement vérifier que le capteurs spectrale ne s'est pas débranché ou endommagé. Les valeurs de NDVI doivent être entre 0 et 1 au dessus de la végétation. *Vous pouvez testez rapidement que le NDVI est plus élevé sur des zones denses en végétation (entre 0,6 et 0,8) et plus faible sur sol nu.*
 
+<img 
+ src="https://github.com/user-attachments/assets/d08c6bd5-c575-4cd3-bda6-514d506713ba"
+  style="width: 25%; height: auto;"
+/>
+
 <h3>4.4 En cas de problème</h2>
 
 *Si vous rencontrez les problèmes suivants :*
@@ -124,14 +135,41 @@ Les données sont sauvegardé dans la Console Mobilab qui n'est pas une solution
 
 Le téléchargement peut se faire depuis un PC ou smartpone mais ça sera beaucoup plus confortable depuis un PC.
 
-- Cliquez sur le dossier de votre Végémètre
+- Cliquez sur le dossier de votre Végémètre-RTK
+
+<img 
+ src="https://github.com/user-attachments/assets/9943e40c-cd5c-4389-868a-8199b9c46ef6"
+  style="width: 50%; height: auto;"
+/>
 
 - Cliquez sur le dashboard "Export_data_V2.1_XX"
+
+<img 
+  src="https://github.com/user-attachments/assets/ab8476f4-d650-4406-865c-d766ed628f4d"
+  style="width: 50%; height: auto;"
+/>
+
 - Sélectionnez la date d'acquisition que vous souhaitez exporter. Si vous double-cliquez sur un jour cela sélectionne la journée entière.
-- Dans la fenêtre "Export_data" allez dans le menu et cliquez sur "inspecter les données"
-- Dans afficher le dataframe, sélectionnez "série jointe par une chronologie
-- Décochez la case "Données formatées"
-- Enfin cliquez sur "Téléchargez en format csv"
+
+<img 
+  src="https://github.com/user-attachments/assets/69b478aa-8980-45f2-8583-6b0c478cdf88"
+  style="width: 50%; height: auto;"
+/>
+
+- Dans la fenêtre "Export_data" allez dans le menu et cliquez sur **"Inspecter les données"**
+
+<img 
+  src="https://github.com/user-attachments/assets/bea67ee1-caa5-4f6e-b076-581e98735fc2"
+  style="width: 50%; height: auto;"
+/>
+
+- Dans "afficher le dataframe", sélectionnez **"série jointe par une chronologie"**. Puis décochez la case **"Données formatées"**. Enfin cliquez sur **"Téléchargez en format csv"**
+
+<img 
+  src="https://github.com/user-attachments/assets/632439e5-d539-456d-ad63-11bfebcd239e"
+  style="width: 50%; height: auto;"
+/>
+
 
 
 <h2>Produire une carte</h2>
@@ -144,7 +182,7 @@ Voici quelques informations pratiques pour faire votre carte sur QGIS :
      - Les **"** par rien (QGIS ne comprendra pas les entête de colonnes sinon)
 - Importez le .csv dans QGIS avec le code EPSG:4171
 
-# Specification techniques
+<h2>Specification techniques</h2>
 
 |paramètre|valeur|
 |---------|------|
