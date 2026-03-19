@@ -6,6 +6,8 @@ Le Végémètre-RTK a donc besoin d'un accès à internet par wifi pour fonction
 
 Le Végémètre-RTK calcule en permanence sa position avec une précision centimétrique grâce au réseau Centipède-RTK.
 
+Le Végémètre-RTK mesure l'intensité lumineuse refleté par votre surface mesurée pour chaque bande spectrale. Cette intensité varie fortement avec la variation naturelle de l'ensoleillement. Cela ne posera pas de problème si vous souhaitez calculer des indices de végétations normalisés comme le NDVI. Cependant si vous souhaitez traiter les longueurs d'ondes de manière indépendante vous devrez réaliser des acquisitions régulièrement sur une surface de référence pour pouvoir normaliser par la suite les valeurs obtenues sur la zone d'observation.
+
 <h2>1. Partage de connexion</h2>
 Le Végémètre se connecte par défaut à un accès wifi. Avec votre smartphone, générez un partage de connexion avec ces informations :
 
