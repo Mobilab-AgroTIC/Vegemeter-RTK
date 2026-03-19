@@ -1,34 +1,15 @@
-﻿# Vegémètre‑RTK — Guide d’utilisation
+﻿<h1>Prendre en main le Végémèter-RTK</h1>
+Le Végémètre RTK est un capteur piéton qui permet de réaliser des mesures spectrales géoréférencées au champs. Le capteur réalise 10 mesures par seconde et enregistre simultanemenent les données GNSS de position, altitude, précision ainsi que les 18 bandes spectrales (visible et proche infrarouge) produite par le capteur AS7265x.
+Les données sont envoyées en temps réel sur la console mobilab où elles peuvent être consultées et télécharger.
 
-## 🧭 Présentation
-Le **Végémètre‑RTK** est un capteur mobile piéton conçu pour acquérir des mesures spectrales géoréférencées en champ.
+Le Végémètre-RTK a donc besoin d'un accès à internet par wifi pour fonctionner.
 
-- **10 mesures par seconde**
-- **GNSS RTK** (position, altitude, précision centimétrique)
-- **18 bandes spectrales** (capteur AS7265x — visible + proche infrarouge)
-- Données transmises en **temps réel** à la console **Mobilab** via Wi‑Fi
+Le Végémètre-RTK calcule en permanence sa position avec une précision centimétrique grâce au réseau Centipède-RTK.
 
-> ⚠️ Nécessite une **connexion internet via Wi‑Fi** (partage de connexion mobile ou point d’accès).
+Le Végémètre-RTK mesure l'intensité lumineuse refleté par votre surface pour chaque bande spectrale. Cette intensité varie fortement avec la variation naturelle de l'ensoleillement. Cela ne posera pas de problème si vous souhaitez calculer des indices de végétations normalisés comme le NDVI. Cependant si vous souhaitez traiter les longueurs d'ondes de manière indépendantes vous devrez normaliser la valeur mesurée sur votre zone d'observation par une valeur mesurée sur une surface de référence (une moquette grise). Le Végémètre-RTK ne fait pas ce calcul, il se fait post-acquisition.
 
----
-
-## 📌 Organisation du document
-1. [Prérequis](#-prérequis)
-2. [Démarrage](#-démarrage)
-3. [Labelisation des mesures](#-labelisation-des-mesures)
-4. [Accès aux données](#-accès-aux-données)
-5. [Contrôles qualité](#-contrôles-qualité)
-6. [Routine d’acquisition recommandée](#-routine-dacquisition-recommandée)
-7. [Téléchargement des données](#-téléchargement-des-données)
-8. [Production de cartes (QGIS)](#-production-de-cartes-qgis)
-9. [Spécifications techniques](#-spécifications-techniques)
-
----
-
-## ✅ Prérequis
-
-### 1) Partage de connexion Wi‑Fi
-Le Végémètre‑RTK se connecte automatiquement à un point d’accès Wi‑Fi. Configurez le partage de connexion sur votre smartphone avec :
+<h2>1. Partage de connexion</h2>
+Le Végémètre se connecte par défaut à un accès wifi. Avec votre smartphone, générez un partage de connexion avec ces informations :
 
 - nom : __bbsocoul__
 - mot de passe : __bbsocoul__
