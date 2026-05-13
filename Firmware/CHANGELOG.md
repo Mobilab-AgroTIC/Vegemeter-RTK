@@ -6,6 +6,17 @@ Le détail de la trame MQTT de chaque version est dans
 Légende : 🔴 = change la trame MQTT (adaptation serveur nécessaire) ·
 🟠 = même trame, comportement d'envoi différent.
 
+## [2.2.1] – 2026-05-13
+
+### Trame MQTT
+- 🔴 `gnss.lat`, `gnss.lon` et `gnss.hMSL` passent de `double` à `int32_t` :
+  ils sont écrits en **entiers** (`436170123`) et non plus en notation
+  scientifique (`4.36170123e8`). Mêmes clés, mêmes unités (1e-7 degré, mm).
+  Corrige les latitudes aberrantes (validé sur un tour de stade).
+
+### Autres changements
+- `sensor_id` : `V2.2_B8`.
+
 ## [2.2.0] – 2026-05-13
 
 ### Trame MQTT

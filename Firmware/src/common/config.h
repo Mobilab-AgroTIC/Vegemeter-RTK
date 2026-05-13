@@ -1,7 +1,7 @@
 #pragma once
 
 // Config General
-#define BBSOCOUL_ID "V2.1_B1"
+#define BBSOCOUL_ID "V2.2_B8"
 #define BTN_SEND_DATA_PIN 34
 #define BTN_LABEL_1_PIN 32
 #define BTN_LABEL_2_PIN 33

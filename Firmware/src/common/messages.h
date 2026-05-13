@@ -7,7 +7,7 @@
 // GNSS snapshot
 typedef struct {
     uint64_t ts_ms;
-    double lat, lon, hMSL;
+    int32_t lat, lon, hMSL;
     uint8_t num_sats;
     uint8_t fix_type;
     uint8_t carsoln;
