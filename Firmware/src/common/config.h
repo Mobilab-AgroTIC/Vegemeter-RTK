@@ -1,22 +1,21 @@
 #pragma once
 
 // Config General
-#define BBSOCOUL_ID "V2.1_B7"
+#define BBSOCOUL_ID "V2.1_B1"
 #define BTN_SEND_DATA_PIN 34
 #define BTN_LABEL_1_PIN 32
 #define BTN_LABEL_2_PIN 33
+#define LOG_LEVEL 2 // 0=NONE 1=ERROR 2=WARNING 3=INFO 4=DEBUG
 
 // Config GNSS
 #define GNSS_RX_PIN 27
 #define GNSS_TX_PIN 26
 #define GNSS_POWER_PIN 25
-#define GNSS_SAMPLE_RATE_HZ 10
 #define GNSS_BAUDRATE 460800
 #define GNSS_UART_PORT 1
-#define GNSS_RATE_GGA 10
-#define GNSS_NAV_RATE 10 // Navigation rate 10Hz
-
-// Cofig NTRIP
+#define GNSS_RATE_GGA 50 // Envoi d'une trame GGA toutes les 10 mesures (1 par seconde si sample rate 10Hz)
+#define GNSS_NAV_RATE 10
+// Config NTRIP
 #define NTRIP_HOST "crtk.net"
 #define NTRIP_PORT 2101
 #define NTRIP_USER "centipede"
@@ -49,5 +48,5 @@
 // Taille des queues
 #define QUEUE_GNSS_LEN 10
 #define QUEUE_SPECTRO_LEN 10
-#define QUEUE_PUBLISH_LEN 100
-#define QUEUE_GGA_LEN 5
+#define QUEUE_PUBLISH_LEN 500
+//#define QUEUE_GGA_LEN 5

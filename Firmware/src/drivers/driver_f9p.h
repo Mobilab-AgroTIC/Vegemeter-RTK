@@ -15,7 +15,6 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
 
 // Envoyer une trame RTCM au F9P
 void driver_f9p_sendRTCM(const uint8_t* data, size_t length);
-String generateGGA(UBX_NAV_PVT_data_t *ubxData);
 
 
 #endif // DRIVER_F9P_H

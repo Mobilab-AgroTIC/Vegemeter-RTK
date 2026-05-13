@@ -6,6 +6,28 @@ Le détail de la trame MQTT de chaque version est dans
 Légende : 🔴 = change la trame MQTT (adaptation serveur nécessaire) ·
 🟠 = même trame, comportement d'envoi différent.
 
+## [2.2.0] – 2026-05-13
+
+### Trame MQTT
+- Mêmes clés et mêmes unités que 2.1.0.
+- 🟠 `delta_gnss_spectro_ms` devient signé (peut être négatif).
+- 🟠 Fusion revue : association de la position GNSS et de la mesure spectrale
+  les plus proches dans le temps ; une mesure spectrale n'est plus réutilisée
+  dans plusieurs trames.
+- 🟠 En cas de coupure du broker, les trames sont conservées (file de 500
+  messages) et renvoyées à la reconnexion : arrivées en retard et en rafale
+  possibles, doublons possibles (QoS 1).
+- 🟠 `sensor_id` du firmware publié : `V2.1_B1` (ne reflète pas la version).
+
+### Autres changements
+- Système de journalisation centralisé avec niveaux (`LOG_LEVEL`).
+- Trame GGA envoyée au caster NTRIP générée directement depuis NAV-PVT ;
+  la tâche GGA est supprimée et intégrée à la tâche NTRIP.
+- Reconnexion automatique au caster NTRIP, lectures non bloquantes
+  (corrections des blocages de tâches).
+- MQTT : keep-alive 15 s, buffer de sérialisation statique.
+- Répartition des tâches FreeRTOS entre les deux cœurs revue.
+
 ## [2.1.0] – 2025-11-04
 
 ### Trame MQTT

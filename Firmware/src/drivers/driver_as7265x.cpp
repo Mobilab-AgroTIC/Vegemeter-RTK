@@ -1,6 +1,8 @@
 #include "driver_as7265x.h"
 #include "common/config.h"
 #include "common/messages.h"
+#include "common/logger.h"
+#include "common/logger.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "HardwareSerial.h"
@@ -15,11 +17,12 @@ static HardwareSerial* as7265_serial = nullptr;
 
 bool driver_as7265x_init(HardwareSerial& serial, int txPin, int rxPin, uint32_t baudrate) {
     as7265_serial=&serial;
-    Serial.println("[AS7265X] Initializing...");
+    LOG_INFO("[AS7265X] Initializing...");
     serial.begin(baudrate,SERIAL_8N1,rxPin,txPin);
+    serial.setTimeout(200); // 100ms timeout for serial operations
     // Check if the serial port is properly started
     if (!&serial) {
-        Serial.println("[AS7265X] Error: Serial port not initialized.");
+        LOG_ERROR("[AS7265X] Error: Serial port not initialized.");
         return false;
     }
     
@@ -33,36 +36,45 @@ bool driver_as7265x_init(HardwareSerial& serial, int txPin, int rxPin, uint32_t 
     }
     
     if (response.indexOf("OK") != -1) {
-        Serial.println("[AS7265X] Communication OK.");
         return true;
     } else {
-        Serial.println("[AS7265X] Error: No response from sensor or unexpected response.");
+        LOG_ERROR("[AS7265X] Error: No response from sensor or unexpected response.");
         return false;
     }
 }
 
 
 bool driver_as7265x_get_data() {
-    Serial.println("[AS7265X] Sending ATCDATA command.");
+    LOG_DEBUG("[AS7265X] Sending ATCDATA command.");
     as7265_serial->println("ATCDATA");
     String dataAS = "";
     unsigned long startTime = millis();
     const unsigned long timeout = 500; // 500ms timeout for response
 
     // Wait for data with a timeout
-    while (millis() - startTime < timeout) {
+    while (!as7265_serial->available()) {
+        // Just waiting for data to be available
+        if (millis() - startTime > timeout) {
+            LOG_ERROR("[AS7265X] Timeout while waiting for response.");
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5)); // Small delay to avoid busy waiting
+    }
+    dataAS = as7265_serial->readStringUntil('\n');
+    /* while (millis() - startTime < timeout) {
         if (as7265_serial->available()) {
             dataAS = as7265_serial->readStringUntil('\n');
             break;
         }
-    }
+    } */
 
     if (dataAS.length() == 0) {
-        Serial.println("[AS7265X] Timeout while waiting for response.");
+        LOG_ERROR("[AS7265X] Error: Received empty response.");
         return false;
     }
 
-    //Serial.println("[AS7265X] Received raw data: " + dataAS);
+    //LOG_INFO("[AS7265X] Received raw data: " + dataAS);
+    LOG_DEBUG("[AS7265X] Received raw data: %s", dataAS.c_str());
 
     // Clean up the string and parse the data
     dataAS.trim();
@@ -114,10 +126,10 @@ bool driver_as7265x_get_data() {
 
     // Send the parsed data to the queue
     if (xQueueSend(QueueSpectro, &spectro_msg, 0)) {
-        Serial.println("[AS7265X] Data successfully sent to QueueSpectro : timestamp : "+String(spectro_msg.ts_ms)+" ; bande A :"+String(spectro_msg.A));
+        LOG_DEBUG("[AS7265X] Data successfully sent to QueueSpectro : timestamp : %lu ; bande A : %f", spectro_msg.ts_ms, spectro_msg.A);
         return true;
     } else {
-        Serial.println("[AS7265X] Error: Failed to send data to QueueSpectro.");
+        LOG_ERROR("[AS7265X] Error: Failed to send data to QueueSpectro.");
         return false;
     }
 }

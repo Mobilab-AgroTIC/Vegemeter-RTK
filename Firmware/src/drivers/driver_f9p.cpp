@@ -2,6 +2,7 @@
 #include "common/config.h"
 #include "SparkFun_u-blox_GNSS_Arduino_Library.h"
 #include "common/messages.h"
+#include "common/logger.h"
 #include "NTRIPClient.h"
 
 //static HardwareSerial* f9pSerial = nullptr;
@@ -14,11 +15,70 @@ gnss_snapshot_t gnss_msg;
 extern QueueHandle_t QueueGNSS;
 extern NTRIPClient ntripclient;
 static HardwareSerial* f9p_serial = nullptr;
+
+
+// ============================================================
+// Utilitaire : calcul checksum NMEA (XOR entre $ et *)
+// ============================================================
+static uint8_t nmea_checksum(const char* sentence) {
+    uint8_t cs = 0;
+    for (const char* p = sentence + 1; *p && *p != '*'; p++) {
+        cs ^= (uint8_t)*p;
+    }
+    return cs;
+}
+
+// ============================================================
+// Génération d'une trame GGA depuis un paquet NAV-PVT
+// Retourne true si la trame a pu être générée (fix valide)
+// ============================================================
+static bool generate_gga_from_pvt(UBX_NAV_PVT_data_t *ubxData, char* gga, size_t gga_size) {
+
+    // Qualité fix au sens NMEA GGA
+    uint8_t quality = 0;
+    if      (ubxData->fixType >= 3 && ubxData->flags.bits.carrSoln == 2) quality = 4; // RTK fixe
+    else if (ubxData->fixType >= 3 && ubxData->flags.bits.carrSoln == 1) quality = 5; // RTK flottant
+    else if (ubxData->fixType >= 3)                                       quality = 1; // 3D GPS
+    else if (ubxData->fixType == 2)                                       quality = 1; // 2D GPS
+
+    if (quality == 0) return false;
+
+    // Lat/lon UBX (1e-7 deg) → format NMEA DDMM.MMMMM
+    double lat_deg = ubxData->lat * 1e-7;
+    double lon_deg = ubxData->lon * 1e-7;
+    int    lat_d   = (int)fabs(lat_deg);
+    double lat_m   = (fabs(lat_deg) - lat_d) * 60.0;
+    int    lon_d   = (int)fabs(lon_deg);
+    double lon_m   = (fabs(lon_deg) - lon_d) * 60.0;
+    char   lat_h   = (lat_deg >= 0.0) ? 'N' : 'S';
+    char   lon_h   = (lon_deg >= 0.0) ? 'E' : 'W';
+
+    double alt_m   = ubxData->hMSL * 1e-3;
+    float  hdop    = fminf(ubxData->hAcc * 1e-3f, 99.9f);
+    double utc_sec = ubxData->sec + (ubxData->iTOW % 1000) * 1e-3;
+
+    char body[120];
+    snprintf(body, sizeof(body),
+        "$GPGGA,%02u%02u%06.3f,"
+        "%02d%08.5f,%c,"
+        "%03d%08.5f,%c,"
+        "%u,%02u,%.1f,"
+        "%.3f,M,%.3f,M,,",
+        ubxData->hour, ubxData->min, utc_sec,
+        lat_d, lat_m, lat_h,
+        lon_d, lon_m, lon_h,
+        quality, ubxData->numSV, hdop,
+        alt_m, 0.0
+    );
+
+    snprintf(gga, gga_size, "%s*%02X", body, nmea_checksum(body));
+    return true;
+}
+
 // ============================================================
 // Callback NAV-PVT (automatique)
 // ============================================================
 void ubx_callback(UBX_NAV_PVT_data_t *ubxData) {
-
     gnss_msg.lat  = ubxData->lat;       // degrés
     gnss_msg.lon = ubxData->lon;       // degrés
     gnss_msg.hMSL  = ubxData->hMSL;   // m
@@ -36,23 +96,36 @@ void ubx_callback(UBX_NAV_PVT_data_t *ubxData) {
     gnss_msg.ms        = ubxData->iTOW % 1000;
     gnss_msg.ts_ms     = millis();
     xQueueSend(QueueGNSS, &gnss_msg, 0); // Le 0 indique un délai d'attente nul
-    Serial.println("[F9P] Data successfully sent to QueueGNSS : timestamp : ");
-}
+    LOG_INFO("[F9P] Data successfully sent to QueueGNSS : timestamp : %lu", gnss_msg.ts_ms);
+    LOG_INFO("[F9P] NAV-PVT → QueueGNSS ts=%lu fix=%u carrSoln=%u",
+             gnss_msg.ts_ms, gnss_msg.fixtype, gnss_msg.carrsoln);
 
+    // 2. Génération GGA à fréquence réduite
+    static uint8_t gga_counter = 0;
+    if (++gga_counter < GNSS_RATE_GGA) return;
+    gga_counter = 0;
 
-
-// gga_callback ne fonctionne pas ou du moins, elle n'est jamais appelée
-void gga_callback(NMEA_GGA_data_t *nmeaData) {
-    // Convertir les octets NMEA en String
-    String ggaMessage = "";
-    for (int i = 0; i < nmeaData->length; i++) {
-        ggaMessage += (char)nmeaData->nmea[i];
+    char gga[130];
+    if (generate_gga_from_pvt(ubxData, gga, sizeof(gga))) {
+        ntripclient.setLastGGA(String(gga));
+        LOG_INFO("[F9P] GGA → NTRIP : %s", gga);
+    } else {
+        LOG_WARN("[F9P] GGA non générée : pas de fix valide (fixType=%u)", ubxData->fixType);
     }
-
-    // Sauvegarde dans ton client NTRIP
-    ntripclient.setLastGGA(ggaMessage);
-    Serial.printf("[F9P] GGA received: %s\n", ggaMessage.c_str());
 }
+
+// ============================================================
+// Callback RTCM (automatique)
+// ============================================================
+/* void rxm_rtcm_callback(UBX_NAV_RELPOSNED_data_t msg) {
+    // msg->refStationId contient l'ID de la base (0 à 4095)
+    LOG_INFO("[F9P] RTCM Received -: %d", msg.refStationId);
+        
+    // Optionnel : stocker l'ID dans une variable globale ou l'envoyer à votre log système
+    //gnss_msg.baseStationId = msg->refStationId; 
+
+} */
+
 // ============================================================
 // Initialisation du F9P
 // ============================================================
@@ -66,7 +139,7 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
         delay(1500);
     }
     else {
-        Serial.println("[F9P] Warning: no power pin defined");
+        LOG_WARN("[F9P] Warning: no power pin defined");
     }
 
     // UART
@@ -75,49 +148,29 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
     delay(1000);
 
     if (!serial) {
-        Serial.println("[F9P] Error: cannot start serial");
+        LOG_ERROR("[F9P] Error: cannot start serial");
         return false;
     }
     else {
-        Serial.println("[F9P] Serial started");
+        LOG_INFO("[F9P] Serial started");
     }
 
     if(myGNSS.begin(serial)){
-        Serial.println("[F9P] GNSS detected");
+        LOG_INFO("[F9P] GNSS detected");
     } else {
-        Serial.println("[F9P] Error: GNSS not detected");
+        LOG_ERROR("[F9P] Error: GNSS not detected");
         return false;
     }
     
-    //myGNSS.setUART1Output(COM_TYPE_UBX); //Set the UART port to output UBX only
-    myGNSS.setUART1Output(COM_TYPE_UBX | COM_TYPE_NMEA); // Active UBX + NMEA
-    myGNSS.disableNMEAMessage(UBX_NMEA_GLL, COM_PORT_UART1); // Several of these are on by default on ublox board so let's disable them
-    myGNSS.disableNMEAMessage(UBX_NMEA_GSA, COM_PORT_UART1);
-    myGNSS.disableNMEAMessage(UBX_NMEA_GSV, COM_PORT_UART1);
-    myGNSS.disableNMEAMessage(UBX_NMEA_RMC, COM_PORT_UART1);
-    myGNSS.disableNMEAMessage(UBX_NMEA_VTG, COM_PORT_UART1);
-    myGNSS.enableNMEAMessage(UBX_NMEA_GGA, COM_PORT_UART1, GNSS_RATE_GGA);
+    myGNSS.setUART1Output(COM_TYPE_UBX); // Active UBX + NMEA
     myGNSS.setNavigationFrequency(GNSS_NAV_RATE); // Set the navigation rate
-    //myGNSS.setAutoPVT(true); // A voir si on le laisse
+    myGNSS.configureMessage(UBX_CLASS_RXM, UBX_RXM_RTCM, COM_PORT_UART1, 1);
     myGNSS.setAutoPVTcallbackPtr(&ubx_callback);
-    myGNSS.setNMEAGNGGAcallbackPtr(&gga_callback); //Ne fonctionne pas pour l'instant donc production d'un GGA factice à partir de UBX dans generate GGA
+    //myGNSS.setAutoRELPOSNEDcallback(&rxm_rtcm_callback);
     myGNSS.saveConfiguration();
     delay(100);
 
-    Serial.println("[F9P] GNSS init OK");
+    LOG_INFO("[F9P] GNSS init OK");
     return true;
 }
 
-// ============================================================
-// Envoi d’une trame RTCM
-// ============================================================
-void driver_f9p_sendRTCM(const uint8_t* data, size_t length) {
-    if (f9p_serial) {
-        f9p_serial->write(data, length);
-        f9p_serial->flush(); // attendre la fin
-        Serial.printf("[F9P] RTCM sent (%d bytes)\n", length);
-    }
-    else {
-        Serial.println("[F9P] Error sending RTCM : serial not started");
-    }
-}

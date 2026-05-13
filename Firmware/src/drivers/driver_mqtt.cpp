@@ -2,10 +2,12 @@
 #include "freertos/task.h"
 #include "ArduinoJson.h"
 #include "AsyncMqttClient.h"
-#include "driver_mqtt_ntrip.h"
+#include "driver_mqtt.h"
 #include "WiFi.h"
 #include "common/config.h"
 #include "common/messages.h"
+#include "common/logger.h"
+#include "common/logger.h"
 #include "NTRIPClient.h"
 #include "drivers/driver_button.h"
 
@@ -14,73 +16,58 @@ extern NTRIPClient ntripclient;
 
 // --- Callback : WiFi connecté + IP obtenue ---
 void onWifiGotIP(WiFiEvent_t event, WiFiEventInfo_t info) {
-  Serial.println("[WIFI] Got IP, trying MQTT connect...");
+  LOG_INFO("[WIFI] Got IP, trying MQTT connect...");
 
 
   // Lancer MQTT (si pas déjà connecté)
   if (!mqttClient.connected()) {
     mqttClient.connect();
   }
-  
-  // Lancer NTRIP
-  setup_ntrip(NTRIP_HOST,NTRIP_PORT,NTRIP_MNTPNT,NTRIP_USER,NTRIP_PASSWORD);
-  
+    
 }
 
 // --- Callback : WiFi perdu ---
 void onWifiDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-  Serial.println("[WIFI] Lost connection, reconnecting WiFi...");
+  LOG_INFO("[WIFI] Lost connection, reconnecting WiFi...");
   WiFi.disconnect();
   WiFi.reconnect();
 }
 
 // --- Initialisation WiFi ---
 void setup_wifi(const char* ssid, const char* password) {
-  Serial.printf("[WIFI] start connect to %s\n", ssid);
-
+  LOG_INFO("[WIFI] Starting connection to %s", ssid);
   WiFi.mode(WIFI_STA);
   WiFi.onEvent(onWifiGotIP, ARDUINO_EVENT_WIFI_STA_GOT_IP);
   WiFi.onEvent(onWifiDisconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
   WiFi.begin(ssid, password);
-
-  Serial.println("[WIFI] WiFi.begin() called (async). Waiting for events...");
-}
-
-
-void setup_ntrip(char* host,int port,char* mntpnt,char* user,char* psw){
-    Serial.println("Requesting MountPoint's Raw data");
-    if(!ntripclient.reqRaw(host,port,mntpnt,user,psw)){
-        Serial.println("failed to connect to ntrip");
-        //delay(15000);
-        //ESP.restart();
-    }
-    Serial.println("Requesting MountPoint is OK");
+  LOG_INFO("[WIFI] WiFi.begin() called (async). Waiting for events...");
 }
 
 // --- Callback : connecté au broker ---
 void onMqttConnect(bool sessionPresent) {
-  Serial.printf("[MQTT] Connected. Session present: %s\n", sessionPresent ? "true" : "false");
+  LOG_INFO("[MQTT] Connected. Session present: %s", sessionPresent ? "true" : "false");
 }
 
 // --- Callback : déconnecté du broker ---
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
-  Serial.printf("[MQTT] Disconnected (reason %d)\n", (int)reason);
+  LOG_ERROR("[MQTT] Disconnected (reason %d)", (int)reason);
   if (WiFi.isConnected()) {
-    Serial.println("[MQTT] WiFi OK, scheduling reconnect...");
+    LOG_INFO("[MQTT] WiFi OK, scheduling reconnect...");
     // On ne reconnecte pas immédiatement pour éviter une boucle
     vTaskDelay(pdMS_TO_TICKS(2000));
     mqttClient.connect();
   } else {
-    Serial.println("[MQTT] Waiting for WiFi before reconnecting...");
+    LOG_INFO("[MQTT] Waiting for WiFi before reconnecting...");
   }
 }
 
 // --- Initialisation MQTT ---
 void setup_mqtt(const char* mqtt_server, const char* mqtt_user, const char* mqtt_password, uint16_t mqtt_port) {
-  Serial.println("[MQTT] Setup...");
+  LOG_INFO("[MQTT] Setup...");
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCredentials(mqtt_user, mqtt_password);
+  mqttClient.setKeepAlive(15);
   mqttClient.onConnect(onMqttConnect);
   mqttClient.onDisconnect(onMqttDisconnect);
   // ⚠️ Pas de mqttClient.connect() ici !
@@ -88,7 +75,7 @@ void setup_mqtt(const char* mqtt_server, const char* mqtt_user, const char* mqtt
 }
 
 // Déclaration de la fonction qui sera appelée dans le loop ou par une autre tâche
-void prepare_and_send_mqtt_message(const fused_message_t &msg) {
+bool prepare_and_send_mqtt_message(const fused_message_t &msg) {
     // Le buffer JSON doit être suffisamment grand pour tout le contenu.
     // 768 octets semblent adéquats, mais vérifiez si nécessaire.
     StaticJsonDocument<768> doc;
@@ -146,37 +133,30 @@ void prepare_and_send_mqtt_message(const fused_message_t &msg) {
 
     // Sérialiser
     size_t measured_size = measureJson(doc);
-    // Utiliser un buffer dynamique ou un array temporaire pour la sérialisation
-    // Créer un buffer sur le tas (heap) pour éviter un débordement de pile (stack overflow)
-    char* payload = (char*)malloc(measured_size + 1);
-    if (!payload) {
-        Serial.println("[MQTT] Allocation failed for payload.");
-        return;
-    }
-    size_t len = serializeJson(doc, payload, measured_size + 1);
+    char payload[768];
+    size_t len = serializeJson(doc, payload, sizeof(payload));
 
     // Publier
     bool state = state_button_send_data(); // Assurez-vous que cette fonction est disponible
-    
-    if (state) {
-        if (mqttClient.connected()) {
-            // Utilisation de QoS 1 (At least once) par défaut pour un envoi fiable,
-            // ou changez à QoS 0 si la performance est critique et la perte acceptable.
-            // Le "true" à la fin signifie que le message n'est PAS retenu (non-retained).
-            uint16_t packetId = mqttClient.publish(MQTT_OUTPUT, 1, false, payload, len); 
-            
-            if (packetId > 0) {
-                Serial.printf("[MQTT] Published fused msg (%d bytes), packet ID: %u\n", len, packetId);
-            } else {
-                Serial.println("[MQTT] Publish failed (packetId=0)");
-            }
-        } else {
-            Serial.println("[MQTT] Client not connected, message dropped.");
-            // Logique de reconnexion/mise en file d'attente à implémenter si nécessaire
-        }
-    } else {
-        Serial.println("[MQTT] Sending Deactivated by button state.");
+    if (!state) {
+        LOG_INFO("[MQTT] Sending Deactivated by button state.");
+        return true; // On considère que c'est "success" même si on n'envoie pas, car c'est voulu
     }
-    
-    free(payload); // Libérer la mémoire allouée
+
+    if (!mqttClient.connected()) {
+        LOG_INFO("[MQTT] Client not connected, message will be retried later.");
+        return false;
+    }
+
+    // Utilisation de QoS 1 (At least once) par défaut pour un envoi fiable,
+    // ou changez à QoS 0 si la performance est critique et la perte acceptable.
+    uint16_t packetId = mqttClient.publish(MQTT_OUTPUT, 1, false, payload, len);
+    if (packetId > 0) {
+        LOG_INFO("[MQTT] Published fused msg (%d bytes), packet ID: %u", len, packetId);
+        return true;
+    }
+
+    LOG_ERROR("[MQTT] Publish failed (messageId=%d, packetId=%d)", msg.message_id, packetId);
+    return false;
+    free(payload);// Note: payload est un tableau statique, pas besoin de free()
 }

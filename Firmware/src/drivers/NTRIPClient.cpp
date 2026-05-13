@@ -1,10 +1,10 @@
 #include"NTRIPClient.h"
+#include "common/logger.h"
 bool NTRIPClient::reqSrcTbl(char* host,int &port)
 {
   if(!connect(host,port)){
-      Serial.print("Cannot connect to ");
-      Serial.println(host);
-      return false;
+    LOG_ERROR("[NTRIP] Cannot connect to %s", host);
+    return false;
   }
   String p;
   p = String("GET /");
@@ -20,17 +20,18 @@ bool NTRIPClient::reqSrcTbl(char* host,int &port)
   unsigned long timeout = millis();
   while (available() == 0) {
      if (millis() - timeout > 5000) {
-        Serial.println("Client Timeout !");
+        LOG_ERROR("[NTRIP] Client Timeout !");
         stop();
         return false;
      }
-     delay(10);
+     vTaskDelay(pdMS_TO_TICKS(10));
   }
   char buffer[12];
   readLine(buffer,sizeof(buffer));
   if(strstr(buffer,"SOURCETABLE 200 OK")!=NULL)
   {
-    Serial.print((char*)buffer);
+    LOG_INFO("[NTRIP] Source table received");
+    LOG_DEBUG("[NTRIP] Buffer: %s", buffer);
     return false;
   }
   return true;
@@ -41,7 +42,7 @@ bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt,char* user,char* psw)
     if(!connect(host,port))return false;
     String p="GET /";
     String auth="";
-    Serial.println("Request NTRIP");
+    LOG_INFO("[NTRIP] Requesting raw data");
     
     p = p + mntpnt + String(" HTTP/1.0\r\n"
         "User-Agent: NTRIPClient for Arduino v1.0\r\n"
@@ -74,7 +75,7 @@ bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt,char* user,char* psw)
             Serial.println("Client Timeout !");
             return false;
         }
-        delay(10);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     char buffer[50];
     readLine(buffer,sizeof(buffer));
@@ -92,6 +93,22 @@ bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt)
 int NTRIPClient::readLine(char* _buffer,int size)
 {
   int len = 0;
+    unsigned long start = millis();
+    while (len < size - 1) {
+        if (available()) {
+            _buffer[len] = read();
+            if (_buffer[len++] == '\n') break;
+        } else {
+            if (millis() - start > 2000) break; // timeout safety
+            vTaskDelay(pdMS_TO_TICKS(5)); // ← cède le CPU
+        }
+    }
+    _buffer[len] = '\0';
+    return len;
+}
+/* int NTRIPClient::readLine_old(char* _buffer,int size)
+{
+  int len = 0;
   while(available()) {
     _buffer[len] = read();
     len++;
@@ -100,13 +117,13 @@ int NTRIPClient::readLine(char* _buffer,int size)
   _buffer[len]='\0';
 
   return len;
-}
+} */
 
 void NTRIPClient::sendGGA(const char* ggaMessage, const char* host, int port, const char* user, const char* passwd, const char* mntpnt) {
     if (!connected()) {
-        Serial.println("NTRIPClient not connected, reconnecting...");
+        LOG_ERROR("[NTRIP] NTRIPClient not connected, reconnecting...");
         if (!connect(host, port)) {
-            Serial.println("Reconnection failed");
+            LOG_ERROR("[NTRIP] Reconnection failed");
             return;
         }
     }
@@ -125,7 +142,7 @@ void NTRIPClient::sendGGA(const char* ggaMessage, const char* host, int port, co
     print(p);
     print(ggaMessage);
     print("\r\n");
-    Serial.println("NTRIPClient sent GGA: " + String(ggaMessage));
+    LOG_INFO("[NTRIP] NTRIPClient sent GGA: %s", ggaMessage);
 }
 
 void NTRIPClient::setLastGGA(String gga) {

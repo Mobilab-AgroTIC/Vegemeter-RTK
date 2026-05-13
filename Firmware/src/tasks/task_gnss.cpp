@@ -2,12 +2,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "common/messages.h"
+#include "common/logger.h"
 #include "drivers/driver_f9p.h"
 #include "common/config.h"
 
 static void task_gnss(void *pvParameters) {
     (void) pvParameters;
-    Serial.println("[GNSS] Task started");
+    LOG_INFO("[GNSS] Task started");
     
     while (1) {
 

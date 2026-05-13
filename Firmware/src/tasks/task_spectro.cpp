@@ -8,8 +8,11 @@
 spectro_sample_t spectro_msg;
 
 void task_spectro(void *pvParameters){
+
     while (1) {
-        driver_as7265x_get_data();
+        bool success = driver_as7265x_get_data();
+        
+        
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

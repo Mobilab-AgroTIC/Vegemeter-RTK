@@ -7,6 +7,8 @@
 
 #include "common/config.h"
 #include "common/messages.h"
+#include "common/logger.h"
+
 
 #include "tasks/task_gnss.h"
 #include "tasks/task_spectro.h"
@@ -14,11 +16,12 @@
 #include "tasks/task_ntrip.h"
 #include "tasks/task_mqtt.h"
 #include "tasks/task_health.h"
-#include "tasks/task_gga.h"
+
 #include "drivers/driver_f9p.h"
 #include "drivers/driver_as7265x.h"
-#include "drivers/driver_mqtt_ntrip.h"
+#include "drivers/driver_mqtt.h"
 #include "drivers/driver_button.h"
+#include "drivers/NTRIPClient.h"
 
 // Déclaration des queues globales
 QueueHandle_t QueueSpectro;
@@ -34,7 +37,8 @@ AsyncMqttClient mqttClient;
 void setup() {
     // Init hardware
     Serial.begin(115200);
-    Serial.println("Starting BBSOCOUL...");
+    LOG_INFO("Serial initialized");
+    LOG_HEALTH("BBSOCOUL ID: %s", BBSOCOUL_ID);
 
     pinMode(BTN_LABEL_1_PIN,INPUT_PULLUP);
     pinMode(BTN_LABEL_2_PIN,INPUT_PULLUP);
@@ -42,9 +46,6 @@ void setup() {
     setup_mqtt(MQTT_BROKER,MQTT_USER, MQTT_PASSWORD,MQTT_PORT);
     setup_wifi(WIFI_SSID, WIFI_PASSWORD);
     
-    
-    //setup_ntrip(NTRIP_HOST,NTRIP_PORT,NTRIP_MNTPNT,NTRIP_USER,NTRIP_PASSWORD);
-
 
     driver_f9p_init(SerialF9P, GNSS_TX_PIN, GNSS_RX_PIN, GNSS_POWER_PIN, GNSS_BAUDRATE);
     driver_as7265x_init(SerialAS7265,SPECTRO_TX_PIN,SPECTRO_RX_PIN,SPECTRO_BAUDRATE);
@@ -56,15 +57,13 @@ void setup() {
     QueuePublish = xQueueCreate(QUEUE_PUBLISH_LEN, sizeof(fused_message_t));
 
     
-    // Création des tâches
-    startTaskGNSS(5,1);
-    startTaskNTRIP(4,1);
-    startTaskGGA(1,1);
-    startTaskSpectro(4,0);
-    startTaskFusion(4,0);
-    startTaskMQTT(2,0);
+    // Lancement des tâches
+    startTaskGNSS(5, 1);      // Core 1 — seul, aucune compétition
+    startTaskNTRIP(3, 0);     // Core 0 
+    startTaskSpectro(5, 0);   // Core 0 — acquisition spectro
+    startTaskFusion(4, 0);    // Core 0 — fusion
+    startTaskMQTT(2, 0);      // Core 0 — AsyncTCP est ici, pas de cross-core
     startTaskHealth();
-
 }
 
 void loop() {

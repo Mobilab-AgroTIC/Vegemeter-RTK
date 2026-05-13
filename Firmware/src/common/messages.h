@@ -52,7 +52,7 @@ typedef struct {
     uint64_t ts_ms;
     gnss_snapshot_t gnss;
     spectro_sample_t spectro;
-    uint16_t delta_time_gnss_spectro_ms;
+    int16_t delta_time_gnss_spectro_ms;
     uint32_t message_id;
 
 } fused_message_t;
