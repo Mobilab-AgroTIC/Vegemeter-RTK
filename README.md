@@ -15,6 +15,7 @@ Le Végémètre se connecte par défaut à un accès wifi. Avec votre smartphone
 - mot de passe : __bbsocoul__
 
 *Si vous ne pouvez pas générer de partage de connexion, il est possible de connecter le Végémètre à autre Wifi mais pour cela il faut modifier le code embarqué dessus en suivant le tutoriel d'assemblage (lien à venir).*
+*Attention : **les végémètres bbsocoul_5 et bbsocoul_6 n'ont pas été mis à jour**. Ils se connectent donc respectivement à des partages de connexion dont le nom et mot de passe sont "bbsocoul_5" et "bbsocoul_6*
 
 <h2>2. Démarrer le végémètre</h2>
 Brancher l'alimentation USB de la batterie externe située à l'extérieur du boitier. Ca y est le Végémètre RTK démarre !
