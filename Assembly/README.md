@@ -8,3 +8,7 @@ Assemblage des composants
 Mettre à jour le firmware de la F9P
 - fichier .bin
 - Bonne version de u-center v22.07
+- Basculer le F9P en baudrate 460800. Aller dans configuration view > PRT > UART1
+<img width="1487" height="803" alt="image" src="https://github.com/user-attachments/assets/9d1c03a0-4b20-409b-908a-bdcbf3a7ac59" />
+- Penser à sauvegarder la conf dans CFG
+- <img width="1486" height="831" alt="image" src="https://github.com/user-attachments/assets/30a760d7-425a-4e34-887e-57a27e809133" />
