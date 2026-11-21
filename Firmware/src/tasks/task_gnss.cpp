@@ -8,7 +8,7 @@
 
 static void task_gnss(void *pvParameters) {
     (void) pvParameters;
-    LOG_INFO("[GNSS] Task started");
+    LOG_DEBUG("[GNSS] Tâche démarrée");
     
     while (1) {
 

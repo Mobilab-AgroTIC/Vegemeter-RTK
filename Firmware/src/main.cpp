@@ -37,8 +37,11 @@ AsyncMqttClient mqttClient;
 void setup() {
     // Init hardware
     Serial.begin(115200);
-    LOG_INFO("Serial initialized");
-    LOG_HEALTH("BBSOCOUL ID: %s", BBSOCOUL_ID);
+    Serial.println();
+    LOG_HEALTH("==================================================");
+    LOG_HEALTH("BBSOCOUL %s | niveau de log : %s (%d)", BBSOCOUL_ID, log_level_name(LOG_LEVEL), LOG_LEVEL);
+    LOG_HEALTH("WiFi \"%s\" | MQTT %s:%d topic %s", WIFI_SSID, MQTT_BROKER, MQTT_PORT, MQTT_OUTPUT);
+    LOG_HEALTH("==================================================");
 
     pinMode(BTN_LABEL_1_PIN,INPUT_PULLUP);
     pinMode(BTN_LABEL_2_PIN,INPUT_PULLUP);
@@ -47,9 +50,12 @@ void setup() {
     setup_wifi(WIFI_SSID, WIFI_PASSWORD);
     
 
-    driver_f9p_init(SerialF9P, GNSS_TX_PIN, GNSS_RX_PIN, GNSS_POWER_PIN, GNSS_BAUDRATE);
-    driver_as7265x_init(SerialAS7265,SPECTRO_TX_PIN,SPECTRO_RX_PIN,SPECTRO_BAUDRATE);
-    
+    bool gnss_ok    = driver_f9p_init(SerialF9P, GNSS_TX_PIN, GNSS_RX_PIN, GNSS_POWER_PIN, GNSS_BAUDRATE);
+    bool spectro_ok = driver_as7265x_init(SerialAS7265,SPECTRO_TX_PIN,SPECTRO_RX_PIN,SPECTRO_BAUDRATE);
+    // Résumé toujours affiché (même en LOG_LEVEL 0)
+    LOG_HEALTH("Init capteurs : GNSS F9P %s | Spectro AS7265X %s",
+               gnss_ok ? "OK" : "ECHEC", spectro_ok ? "OK" : "ECHEC");
+
     
     // Création des queues
     QueueSpectro = xQueueCreate(QUEUE_SPECTRO_LEN, sizeof(spectro_sample_t));

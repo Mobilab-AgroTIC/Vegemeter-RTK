@@ -3,7 +3,7 @@
 bool NTRIPClient::reqSrcTbl(char* host,int &port)
 {
   if(!connect(host,port)){
-    LOG_ERROR("[NTRIP] Cannot connect to %s", host);
+    LOG_WARN("[NTRIP] Connexion à %s impossible", host);
     return false;
   }
   String p;
@@ -20,7 +20,7 @@ bool NTRIPClient::reqSrcTbl(char* host,int &port)
   unsigned long timeout = millis();
   while (available() == 0) {
      if (millis() - timeout > 5000) {
-        LOG_ERROR("[NTRIP] Client Timeout !");
+        LOG_WARN("[NTRIP] Pas de réponse du caster (table des sources)");
         stop();
         return false;
      }
@@ -30,7 +30,7 @@ bool NTRIPClient::reqSrcTbl(char* host,int &port)
   readLine(buffer,sizeof(buffer));
   if(strstr(buffer,"SOURCETABLE 200 OK")!=NULL)
   {
-    LOG_INFO("[NTRIP] Source table received");
+    LOG_DEBUG("[NTRIP] Table des sources reçue");
     LOG_DEBUG("[NTRIP] Buffer: %s", buffer);
     return false;
   }
@@ -39,10 +39,13 @@ bool NTRIPClient::reqSrcTbl(char* host,int &port)
 
 bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt,char* user,char* psw)
 {
-    if(!connect(host,port))return false;
+    if(!connect(host,port)){
+        LOG_DEBUG("[NTRIP] Connexion TCP à %s:%d impossible", host, port);
+        return false;
+    }
     String p="GET /";
     String auth="";
-    LOG_INFO("[NTRIP] Requesting raw data");
+    LOG_DEBUG("[NTRIP] Demande du flux RTCM (mountpoint %s)", mntpnt);
     
     p = p + mntpnt + String(" HTTP/1.0\r\n"
         "User-Agent: NTRIPClient for Arduino v1.0\r\n"
@@ -56,9 +59,6 @@ bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt,char* user,char* psw)
     }
     else {
         auth = base64::encode(String(user) + String(":") + psw);
-        #ifdef Debug
-        Serial.println(String(user) + String(":") + psw);
-        #endif
 
         p = p + String("Authorization: Basic ");
         p = p + auth;
@@ -66,13 +66,11 @@ bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt,char* user,char* psw)
     }
     p = p + String("\r\n");
     print(p);
-    #ifdef Debug
-    Serial.println(p);
-    #endif
     unsigned long timeout = millis();
     while (available() == 0) {
         if (millis() - timeout > 20000) {
-            Serial.println("Client Timeout !");
+            LOG_DEBUG("[NTRIP] Pas de réponse du caster (timeout 20 s)");
+            stop(); // sinon connected() resterait vrai sans flux RTCM
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -81,7 +79,11 @@ bool NTRIPClient::reqRaw(char* host,int &port,char* mntpnt,char* user,char* psw)
     readLine(buffer,sizeof(buffer));
     if(strncmp((char*)buffer,"ICY 200 OK",10))
     {
-      Serial.print((char*)buffer);
+      // Réponse inattendue (ex. "HTTP/1.1 401 Unauthorized", mountpoint inconnu...)
+      String resp(buffer);
+      resp.trim();
+      LOG_THROTTLED(LOG_ERROR, LOG_THROTTLE_MS, "[NTRIP] Caster a refusé la connexion : \"%s\"", resp.c_str());
+      stop();
       return false;
     }
     return true;
@@ -121,9 +123,9 @@ int NTRIPClient::readLine(char* _buffer,int size)
 
 void NTRIPClient::sendGGA(const char* ggaMessage, const char* host, int port, const char* user, const char* passwd, const char* mntpnt) {
     if (!connected()) {
-        LOG_ERROR("[NTRIP] NTRIPClient not connected, reconnecting...");
+        LOG_WARN("[NTRIP] Client non connecté, reconnexion...");
         if (!connect(host, port)) {
-            LOG_ERROR("[NTRIP] Reconnection failed");
+            LOG_WARN("[NTRIP] Reconnexion échouée");
             return;
         }
     }
@@ -142,7 +144,7 @@ void NTRIPClient::sendGGA(const char* ggaMessage, const char* host, int port, co
     print(p);
     print(ggaMessage);
     print("\r\n");
-    LOG_INFO("[NTRIP] NTRIPClient sent GGA: %s", ggaMessage);
+    LOG_DEBUG("[NTRIP] GGA envoyée : %s", ggaMessage);
 }
 
 void NTRIPClient::setLastGGA(String gga) {

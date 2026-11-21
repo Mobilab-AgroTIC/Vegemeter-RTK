@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include <string>
+#include <stdbool.h>
 
 // Structures de données échangées entre tâches
 
@@ -46,9 +46,20 @@ typedef struct {
     float F;
 } spectro_sample_t;
 
+// Type de message publié
+typedef enum : uint8_t {
+    MSG_TYPE_FUSED     = 0, // fusion GNSS + spectro complète
+    MSG_TYPE_HEARTBEAT = 1  // envoi périodique, données capteurs éventuellement absentes
+} msg_type_t;
+
 // Fused message
+// ⚠️ Cette structure est copiée octet par octet dans une queue FreeRTOS :
+// elle ne doit contenir que des types "plain old data" (pas de std::string).
 typedef struct {
-    std::string sensor_id;
+    char sensor_id[16];
+    msg_type_t msg_type;
+    bool gnss_valid;     // true si le bloc gnss contient une donnée reçue
+    bool spectro_valid;  // true si le bloc spectro contient une donnée reçue
     uint64_t ts_ms;
     gnss_snapshot_t gnss;
     spectro_sample_t spectro;

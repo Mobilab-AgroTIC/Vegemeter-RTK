@@ -6,6 +6,29 @@ Le détail de la trame MQTT de chaque version est dans
 Légende : 🔴 = change la trame MQTT (adaptation serveur nécessaire) ·
 🟠 = même trame, comportement d'envoi différent.
 
+## [2.2.2] – à venir
+
+> Branche `V2.2.2_send_empty_data`, en cours de test.
+
+### Trame MQTT
+- 🔴 Nouveaux champs à la racine : `type` (`"fused"` / `"heartbeat"`),
+  `gnss_valid`, `spectro_valid`, et bloc `diag` (`uptime_ms`, `rssi`, `free_heap`).
+- 🔴 Nouveau message **heartbeat** : si aucune fusion GNSS + spectro depuis 2 s,
+  une trame est envoyée avec les données disponibles ; les blocs absents sont
+  remplis de zéros (`*_valid = false`). Envoyée même si le bouton d'envoi est inactif.
+- Les blocs `gnss` et `spectro` sont inchangés par rapport à 2.2.1.
+
+### Autres changements
+- Temps d'intégration du capteur spectral configurable (`SPECTRO_INTEGRATION_TIME_LOOP`)
+  et envoyé au démarrage (`ATINTTIME`), avec vérification de la réponse `AT`.
+- Une trame spectrale incomplète est rejetée au lieu de produire des valeurs partielles.
+- Les trames trop grandes sont abandonnées au lieu d'être réessayées indéfiniment.
+- Journalisation revue : bloc `STATUS` périodique, messages en français,
+  limitation des erreurs répétitives (`LOG_THROTTLE_MS`).
+- `platformio.ini` nettoyé (environnements inutilisés supprimés) ; programme de
+  test matériel du spectro (`src/tests_hw/spectro_test.cpp`, env `spectro_test`).
+- `src/common/config.h` n'est plus versionné (il contient les identifiants WiFi / MQTT) : copier `src/common/config.exemple.h` en `config.h` puis le compléter.
+
 ## [2.2.1] – 2026-05-13
 
 ### Trame MQTT

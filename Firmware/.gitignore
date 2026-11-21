@@ -4,3 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 BBSOCOUL.code-workspace
+
+# Configuration locale avec identifiants WiFi / MQTT (modèle : src/common/config.exemple.h)
+src/common/config.h

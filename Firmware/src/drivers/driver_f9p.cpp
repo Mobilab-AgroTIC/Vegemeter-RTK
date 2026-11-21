@@ -15,6 +15,8 @@ gnss_snapshot_t gnss_msg;
 extern QueueHandle_t QueueGNSS;
 extern NTRIPClient ntripclient;
 static HardwareSerial* f9p_serial = nullptr;
+static bool f9p_init_ok = false;
+static volatile uint32_t pvt_count = 0; // nombre de NAV-PVT reçus depuis le démarrage
 
 
 // ============================================================
@@ -95,23 +97,70 @@ void ubx_callback(UBX_NAV_PVT_data_t *ubxData) {
     gnss_msg.sec       = ubxData->sec;
     gnss_msg.ms        = ubxData->iTOW % 1000;
     gnss_msg.ts_ms     = millis();
-    xQueueSend(QueueGNSS, &gnss_msg, 0); // Le 0 indique un délai d'attente nul
-    LOG_INFO("[F9P] Data successfully sent to QueueGNSS : timestamp : %lu", gnss_msg.ts_ms);
-    LOG_INFO("[F9P] NAV-PVT → QueueGNSS ts=%lu fix=%u carrSoln=%u",
-             gnss_msg.ts_ms, gnss_msg.fixtype, gnss_msg.carrsoln);
+    pvt_count++;
+
+    if (xQueueSend(QueueGNSS, &gnss_msg, 0) == pdTRUE) {
+        LOG_DEBUG("[F9P] NAV-PVT -> QueueGNSS ts=%lu fix=%u carrSoln=%u sats=%u",
+                  (unsigned long)gnss_msg.ts_ms, gnss_msg.fixtype, gnss_msg.carrsoln, gnss_msg.num_sats);
+    } else {
+        LOG_THROTTLED(LOG_WARN, LOG_THROTTLE_MS, "[F9P] QueueGNSS pleine : mesure perdue");
+    }
+
+    // 1. Changement de qualité de fix -> INFO (une ligne par changement seulement)
+    static int last_fix = -1, last_carr = -1;
+    if (gnss_msg.fixtype != last_fix || gnss_msg.carrsoln != last_carr) {
+        LOG_INFO("[F9P] Fix : %s / RTK : %s (sats=%u, hAcc=%lu mm)",
+                 f9p_fix_type_name(gnss_msg.fixtype), f9p_carr_soln_name(gnss_msg.carrsoln),
+                 gnss_msg.num_sats, (unsigned long)gnss_msg.hAcc);
+        last_fix  = gnss_msg.fixtype;
+        last_carr = gnss_msg.carrsoln;
+    }
 
     // 2. Génération GGA à fréquence réduite
     static uint8_t gga_counter = 0;
     if (++gga_counter < GNSS_RATE_GGA) return;
     gga_counter = 0;
 
+    static bool gga_ok = true; // pour ne prévenir qu'au changement d'état
     char gga[130];
     if (generate_gga_from_pvt(ubxData, gga, sizeof(gga))) {
         ntripclient.setLastGGA(String(gga));
-        LOG_INFO("[F9P] GGA → NTRIP : %s", gga);
+        LOG_DEBUG("[F9P] GGA -> NTRIP : %s", gga);
+        if (!gga_ok) LOG_INFO("[F9P] Fix valide : envoi de la position GGA au caster NTRIP");
+        gga_ok = true;
     } else {
-        LOG_WARN("[F9P] GGA non générée : pas de fix valide (fixType=%u)", ubxData->fixType);
+        if (gga_ok) LOG_WARN("[F9P] Pas de fix GNSS valide (fixType=%u) : GGA non envoyée au caster NTRIP", ubxData->fixType);
+        gga_ok = false;
     }
+}
+
+const char* f9p_fix_type_name(uint8_t fixType) {
+    switch (fixType) {
+        case 0:  return "aucun";
+        case 1:  return "dead reckoning";
+        case 2:  return "2D";
+        case 3:  return "3D";
+        case 4:  return "GNSS+DR";
+        case 5:  return "temps seul";
+        default: return "?";
+    }
+}
+
+const char* f9p_carr_soln_name(uint8_t carrSoln) {
+    switch (carrSoln) {
+        case 0:  return "aucun";
+        case 1:  return "float";
+        case 2:  return "fixed";
+        default: return "?";
+    }
+}
+
+bool driver_f9p_is_initialized() {
+    return f9p_init_ok;
+}
+
+uint32_t driver_f9p_get_pvt_count() {
+    return pvt_count;
 }
 
 // ============================================================
@@ -139,7 +188,7 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
         delay(1500);
     }
     else {
-        LOG_WARN("[F9P] Warning: no power pin defined");
+        LOG_WARN("[F9P] Pas de broche d'alimentation définie");
     }
 
     // UART
@@ -148,19 +197,16 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
     delay(1000);
 
     if (!serial) {
-        LOG_ERROR("[F9P] Error: cannot start serial");
+        LOG_ERROR("[F9P] Impossible de démarrer l'UART");
         return false;
     }
-    else {
-        LOG_INFO("[F9P] Serial started");
-    }
+    LOG_DEBUG("[F9P] UART démarré (%lu bauds, RX=%d, TX=%d)", (unsigned long)baudrate, rxPin, txPin);
 
-    if(myGNSS.begin(serial)){
-        LOG_INFO("[F9P] GNSS detected");
-    } else {
-        LOG_ERROR("[F9P] Error: GNSS not detected");
+    if (!myGNSS.begin(serial)) {
+        LOG_ERROR("[F9P] Récepteur GNSS non détecté : vérifier alimentation, câblage et baudrate");
         return false;
     }
+    LOG_DEBUG("[F9P] Récepteur GNSS détecté");
     
     myGNSS.setUART1Output(COM_TYPE_UBX); // Active UBX + NMEA
     myGNSS.setNavigationFrequency(GNSS_NAV_RATE); // Set the navigation rate
@@ -170,7 +216,8 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
     myGNSS.saveConfiguration();
     delay(100);
 
-    LOG_INFO("[F9P] GNSS init OK");
+    f9p_init_ok = true;
+    LOG_INFO("[F9P] Initialisation OK (navigation %d Hz)", GNSS_NAV_RATE);
     return true;
 }
 
