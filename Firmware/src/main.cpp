@@ -25,16 +25,22 @@
 
 // Déclaration des queues globales
 QueueHandle_t QueueSpectro;
+QueueHandle_t QueueSpectroIncident;
 QueueHandle_t QueuePublish;
 QueueHandle_t QueueGNSS;
 
 HardwareSerial SerialF9P(GNSS_UART_PORT);
-HardwareSerial SerialAS7265(SPECTRO_UART_PORT);
+// Spectros AS7265x en I2C : réfléchi sur Wire (bus 0), incident sur Wire1 (bus 1)
 
 NTRIPClient ntripclient;
 AsyncMqttClient mqttClient;
 
 void setup() {
+    // F9P coupé dès le boot : il n'est alimenté qu'après GNSS_POWER_ON_DELAY_MS
+    // (voir driver_f9p_init), sinon l'AXP2101 coupe au démarrage sur batterie.
+    pinMode(GNSS_POWER_PIN, OUTPUT);
+    digitalWrite(GNSS_POWER_PIN, LOW);
+
     // Init hardware
     Serial.begin(115200);
     Serial.println();
@@ -51,14 +57,23 @@ void setup() {
     
 
     bool gnss_ok    = driver_f9p_init(SerialF9P, GNSS_TX_PIN, GNSS_RX_PIN, GNSS_POWER_PIN, GNSS_BAUDRATE);
-    bool spectro_ok = driver_as7265x_init(SerialAS7265,SPECTRO_TX_PIN,SPECTRO_RX_PIN,SPECTRO_BAUDRATE);
+    bool spectro_ok = driver_as7265x_init(SPECTRO_REFLECTED, "AS7265X-REFL", Wire,
+                                          SPECTRO_SDA_PIN, SPECTRO_SCL_PIN, SPECTRO_I2C_FREQ);
+#if SPECTRO_INCIDENT_ENABLE
+    bool incident_ok = driver_as7265x_init(SPECTRO_INCIDENT, "AS7265X-INC", Wire1,
+                                           SPECTRO_INCIDENT_SDA_PIN, SPECTRO_INCIDENT_SCL_PIN, SPECTRO_I2C_FREQ);
+    const char* incident_str = incident_ok ? "OK" : "ECHEC";
+#else
+    const char* incident_str = "désactivé";
+#endif
     // Résumé toujours affiché (même en LOG_LEVEL 0)
-    LOG_HEALTH("Init capteurs : GNSS F9P %s | Spectro AS7265X %s",
-               gnss_ok ? "OK" : "ECHEC", spectro_ok ? "OK" : "ECHEC");
+    LOG_HEALTH("Init capteurs : GNSS F9P %s | Spectro réfléchi %s | Spectro incident %s",
+               gnss_ok ? "OK" : "ECHEC", spectro_ok ? "OK" : "ECHEC", incident_str);
 
-    
+
     // Création des queues
     QueueSpectro = xQueueCreate(QUEUE_SPECTRO_LEN, sizeof(spectro_sample_t));
+    QueueSpectroIncident = xQueueCreate(QUEUE_SPECTRO_INCIDENT_LEN, sizeof(spectro_sample_t));
     QueueGNSS = xQueueCreate(QUEUE_GNSS_LEN, sizeof(gnss_snapshot_t));
     QueuePublish = xQueueCreate(QUEUE_PUBLISH_LEN, sizeof(fused_message_t));
 
@@ -66,7 +81,10 @@ void setup() {
     // Lancement des tâches
     startTaskGNSS(5, 1);      // Core 1 — seul, aucune compétition
     startTaskNTRIP(3, 0);     // Core 0 
-    startTaskSpectro(5, 0);   // Core 0 — acquisition spectro
+    startTaskSpectro(5, 0);   // Core 0 — acquisition spectro réfléchi
+#if SPECTRO_INCIDENT_ENABLE
+    startTaskSpectroIncident(1, 0); // Core 0 — spectro incident (Wire1), non prioritaire : un retard est sans conséquence
+#endif
     startTaskFusion(4, 0);    // Core 0 — fusion
     startTaskMQTT(2, 0);      // Core 0 — AsyncTCP est ici, pas de cross-core
     startTaskHealth();

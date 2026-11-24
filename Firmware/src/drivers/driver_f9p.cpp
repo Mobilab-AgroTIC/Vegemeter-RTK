@@ -5,6 +5,11 @@
 #include "common/logger.h"
 #include "NTRIPClient.h"
 
+// Valeur par défaut si le config.h local ne la définit pas encore
+#ifndef GNSS_POWER_ON_DELAY_MS
+#define GNSS_POWER_ON_DELAY_MS 1000
+#endif
+
 //static HardwareSerial* f9pSerial = nullptr;
 static int pinPower = -1;
 
@@ -183,7 +188,12 @@ bool driver_f9p_init(HardwareSerial& serial, int txPin, int rxPin, int powerPin,
 
     // Alimentation F9P
     if (pinPower >= 0) {
+        // Démarrage différé : sur batterie, l'appel de courant du F9P au boot
+        // fait couper l'AXP2101. On laisse le rail se stabiliser avant de l'alimenter.
         pinMode(pinPower, OUTPUT);
+        digitalWrite(pinPower, LOW);
+        delay(GNSS_POWER_ON_DELAY_MS);
+        LOG_DEBUG("[F9P] Mise sous tension après %d ms", GNSS_POWER_ON_DELAY_MS);
         digitalWrite(pinPower, HIGH);
         delay(1500);
     }

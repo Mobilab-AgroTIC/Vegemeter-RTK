@@ -22,9 +22,17 @@ typedef struct {
     // uint32_t seq;
 } gnss_snapshot_t;
 
-// Spectro sample
+// Spectromètre d'origine d'un échantillon (un capteur par bus I2C)
+typedef enum : uint8_t {
+    SPECTRO_REFLECTED = 0, // capteur réfléchi (végétation), bus Wire
+    SPECTRO_INCIDENT  = 1, // capteur de rayonnement incident, bus Wire1
+    SPECTRO_COUNT
+} spectro_source_t;
+
+// Spectro sample (même structure pour les deux capteurs, distingués par `source`)
 typedef struct {
     uint64_t ts_ms;
+    spectro_source_t source;
     uint8_t label; // 0: none, 1: sample, 2: calibration
     float R;
     float S;
@@ -49,7 +57,8 @@ typedef struct {
 // Type de message publié
 typedef enum : uint8_t {
     MSG_TYPE_FUSED     = 0, // fusion GNSS + spectro complète
-    MSG_TYPE_HEARTBEAT = 1  // envoi périodique, données capteurs éventuellement absentes
+    MSG_TYPE_HEARTBEAT = 1, // envoi périodique, données capteurs éventuellement absentes
+    MSG_TYPE_INCIDENT  = 2  // mesure du spectro incident (bloc `spectro`, source = SPECTRO_INCIDENT)
 } msg_type_t;
 
 // Fused message
@@ -62,7 +71,7 @@ typedef struct {
     bool spectro_valid;  // true si le bloc spectro contient une donnée reçue
     uint64_t ts_ms;
     gnss_snapshot_t gnss;
-    spectro_sample_t spectro;
+    spectro_sample_t spectro;   // réfléchi (FUSED / HEARTBEAT) ou incident (INCIDENT)
     int16_t delta_time_gnss_spectro_ms;
     uint32_t message_id;
 

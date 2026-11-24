@@ -17,7 +17,9 @@ extern QueueHandle_t QueueSpectro;
 extern QueueHandle_t QueuePublish;
 extern QueueHandle_t QueueGNSS;
 extern gnss_snapshot_t gnss_msg;
+extern QueueHandle_t QueueSpectroIncident;
 extern spectro_sample_t spectro_msg;
+extern spectro_sample_t spectro_incident_msg;
 extern AsyncMqttClient mqttClient;
 
 // Une mesure est considérée "fraîche" si elle date de moins de :
@@ -32,6 +34,24 @@ static const char* age_str(char* buf, size_t size, uint32_t ts_ms) {
         snprintf(buf, size, "il y a %lu.%01lu s", (unsigned long)(age / 1000), (unsigned long)((age % 1000) / 100));
     }
     return buf;
+}
+
+// Ligne STATUS d'un spectromètre
+static void print_spectro_status(const char* tag, spectro_source_t id, const spectro_sample_t& last) {
+    char age[24];
+    as7265x_status_t s = driver_as7265x_get_status(id);
+    spectro_sample_t sp = last; // copie locale (mise à jour par la tâche spectro)
+    if (s.success_count > 0 && s.consecutive_failures == 0) {
+        LOG_HEALTH("%s: OK     | %lu mesures | mesure %lu ms + lecture I2C %lu ms | label=%u R=%.2f S=%.2f T=%.2f A=%.2f",
+                   tag, (unsigned long)s.success_count,
+                   (unsigned long)s.last_measure_ms, (unsigned long)s.last_read_ms,
+                   sp.label, sp.R, sp.S, sp.T, sp.A);
+    } else {
+        LOG_HEALTH("%s: ERREUR | %s | %lu échecs consécutifs | dernière mesure : %s",
+                   tag, s.init_ok ? "ne répond plus" : "pas de réponse depuis le démarrage",
+                   (unsigned long)s.consecutive_failures,
+                   age_str(age, sizeof(age), s.last_success_ms));
+    }
 }
 
 // ------------------------------------------------------------
@@ -61,18 +81,13 @@ static void print_status_block() {
                    g.lat * 1e-7, g.lon * 1e-7);
     }
 
-    // --- Spectro ---
-    as7265x_status_t s = driver_as7265x_get_status();
-    spectro_sample_t sp = spectro_msg;
-    if (s.success_count > 0 && s.consecutive_failures == 0) {
-        LOG_HEALTH("SPECTRO : OK     | %lu mesures | label=%u R=%.2f S=%.2f T=%.2f A=%.2f",
-                   (unsigned long)s.success_count, sp.label, sp.R, sp.S, sp.T, sp.A);
-    } else {
-        LOG_HEALTH("SPECTRO : ERREUR | %s | %lu échecs consécutifs | dernière mesure : %s",
-                   s.init_ok ? "ne répond plus" : "pas de réponse depuis le démarrage",
-                   (unsigned long)s.consecutive_failures,
-                   age_str(age, sizeof(age), s.last_success_ms));
-    }
+    // --- Spectros ---
+    print_spectro_status("SPECT-R ", SPECTRO_REFLECTED, spectro_msg);
+#if SPECTRO_INCIDENT_ENABLE
+    print_spectro_status("SPECT-I ", SPECTRO_INCIDENT, spectro_incident_msg);
+#else
+    LOG_HEALTH("SPECT-I : désactivé (SPECTRO_INCIDENT_ENABLE = 0)");
+#endif
 
     // --- Réseau ---
     char wifi[40];
@@ -90,16 +105,18 @@ static void print_status_block() {
                wifi, mqttClient.connected() ? "OK" : "DECONNECTE", ntrip);
 
     // --- Envoi MQTT ---
-    LOG_HEALTH("ENVOI   : %lu publiés (dont %lu heartbeats) | %lu ignorés (bouton) | %lu perdus | %u en attente",
+    LOG_HEALTH("ENVOI   : %lu publiés (dont %lu heartbeats, %lu incidents) | %lu ignorés (bouton) | %lu perdus | %u en attente",
                (unsigned long)mqtt_get_published_count(), (unsigned long)mqtt_get_heartbeat_count(),
+               (unsigned long)mqtt_get_incident_count(),
                (unsigned long)mqtt_get_skipped_count(), (unsigned long)mqtt_get_dropped_count(),
                (unsigned)uxQueueMessagesWaiting(QueuePublish));
 
     // --- Système ---
-    LOG_HEALTH("SYSTEME : heap libre %lu o (min %lu o) | queues GNSS %u/%d SPECTRO %u/%d PUBLISH %u/%d",
+    LOG_HEALTH("SYSTEME : heap libre %lu o (min %lu o) | queues GNSS %u/%d SPECTRO %u/%d INCIDENT %u/%d PUBLISH %u/%d",
                (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(),
                (unsigned)uxQueueMessagesWaiting(QueueGNSS), QUEUE_GNSS_LEN,
                (unsigned)uxQueueMessagesWaiting(QueueSpectro), QUEUE_SPECTRO_LEN,
+               (unsigned)uxQueueMessagesWaiting(QueueSpectroIncident), QUEUE_SPECTRO_INCIDENT_LEN,
                (unsigned)uxQueueMessagesWaiting(QueuePublish), QUEUE_PUBLISH_LEN);
 }
 

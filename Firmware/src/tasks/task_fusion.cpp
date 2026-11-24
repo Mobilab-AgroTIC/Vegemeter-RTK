@@ -11,6 +11,7 @@
 
 extern QueueHandle_t QueueGNSS;
 extern QueueHandle_t QueueSpectro;
+extern QueueHandle_t QueueSpectroIncident;
 extern QueueHandle_t QueuePublish;
 
 extern spectro_sample_t spectro_msg;
@@ -65,6 +66,21 @@ void task_fusion(void *pvParameters) {
         while (xQueueReceive(QueueGNSS, &tmp_gnss, pdMS_TO_TICKS(10)) == pdPASS) {
             last_gnss  = tmp_gnss;
             gnss_ready = true;
+        }
+
+        // --- Spectro incident : publié tel quel (une mesure par SPECTRO_INCIDENT_PERIOD_MS),
+        //     indépendamment de la fusion et du heartbeat ---
+        spectro_sample_t incident;
+        while (xQueueReceive(QueueSpectroIncident, &incident, 0) == pdPASS) {
+            fused_message_t inc = {};
+            fill_common_fields(inc, MSG_TYPE_INCIDENT, messageid);
+            inc.gnss_valid    = false;
+            inc.spectro_valid = true;
+            inc.spectro       = incident;
+            if (push_to_publish_queue(inc)) {
+                LOG_DEBUG("[Fusion] Spectro incident #%lu (ts=%lu ms)",
+                          (unsigned long)inc.message_id, (unsigned long)incident.ts_ms);
+            }
         }
 
         spectro_sample_t tmp_spectro;

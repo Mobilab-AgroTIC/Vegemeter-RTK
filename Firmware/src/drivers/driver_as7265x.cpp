@@ -3,220 +3,361 @@
 #include "common/messages.h"
 #include "common/logger.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "HardwareSerial.h"
 #include "Arduino.h"
-#include "drivers/driver_button.h"
+#include <string.h>
 
-// Global variables, assuming they are defined in the main project file
-extern QueueHandle_t QueueSpectro;
-extern spectro_sample_t spectro_msg;
+// ============================================================
+// Protocole I2C de l'AS7265x (datasheet AS7265x v1-04, §I2C)
+//
+// Le capteur n'expose que 3 registres physiques. Les registres
+// "virtuels" (configuration, données) sont lus/écrits un octet à la
+// fois via WRITE_REG / READ_REG, en surveillant STATUS_REG :
+//   - TX_VALID = 1 : le capteur n'a pas encore consommé l'octet écrit
+//   - RX_VALID = 1 : un octet est disponible dans READ_REG
+// ============================================================
+static constexpr uint8_t AS7265X_ADDR    = 0x49;   // fixe, non modifiable
 
-static HardwareSerial* as7265_serial = nullptr;
+static constexpr uint8_t REG_STATUS      = 0x00;
+static constexpr uint8_t REG_WRITE       = 0x01;
+static constexpr uint8_t REG_READ        = 0x02;
+static constexpr uint8_t STATUS_RX_VALID = 0x01;
+static constexpr uint8_t STATUS_TX_VALID = 0x02;
+
+// Registres virtuels
+static constexpr uint8_t VREG_CONFIG     = 0x04;
+static constexpr uint8_t VREG_INT_TIME   = 0x05;
+static constexpr uint8_t VREG_CAL_FIRST  = 0x14;   // 6 floats de 4 octets : 0x14, 0x18 ... 0x28
+static constexpr uint8_t VREG_DEV_SELECT = 0x4F;
+
+// Bits de VREG_CONFIG
+static constexpr uint8_t CFG_GAIN_SHIFT  = 4;      // bits 5:4
+static constexpr uint8_t CFG_GAIN_MASK   = 0x30;
+static constexpr uint8_t CFG_MODE_SHIFT  = 2;      // bits 3:2 (BANK)
+static constexpr uint8_t CFG_MODE_MASK   = 0x0C;
+static constexpr uint8_t CFG_DATA_RDY    = 0x02;
+static constexpr uint8_t MODE_6CH_ONE_SHOT = 3;
+
+// Bits de VREG_DEV_SELECT : présence des deux esclaves (AS72652 VIS, AS72653 UV)
+static constexpr uint8_t DEV_SLAVES_MASK = 0x30;
+
+// Puces du Triad, dans l'ordre de lecture
+static constexpr uint8_t DEV_NIR = 0x00;   // AS72651 (maître) : R S T U V W
+static constexpr uint8_t DEV_VIS = 0x01;   // AS72652          : G H I J K L
+static constexpr uint8_t DEV_UV  = 0x02;   // AS72653          : A B C D E F
+
+// Timeout d'une opération sur registre virtuel (attente TX_VALID / RX_VALID)
+static constexpr uint32_t VREG_TIMEOUT_MS = 20;
+// Après N échecs consécutifs, on réinitialise le bus I2C (SDA bloquée, etc.)
+static constexpr uint32_t BUS_RECOVERY_AFTER_FAILURES = 5;
 
 // ------------------------------------------------------------
 // Temporisations dérivées du temps d'intégration
-// (datasheet AS7265x v1-04, Figure 59 :
-//   ATINTTIME : 1-255, durée = valeur × ~2.8 ms, défaut 20
-//   ATTCSMD   : défaut 2 = bank0 + bank1, soit 2 périodes d'intégration)
+// (datasheet AS7265x : INT_TIME 1-255, durée = valeur × ~2.8 ms ;
+//  en mode 6 canaux, une mesure complète = 2 périodes d'intégration)
 // ------------------------------------------------------------
 static_assert(SPECTRO_INTEGRATION_TIME_LOOP >= 1 && SPECTRO_INTEGRATION_TIME_LOOP <= 255,
-              "SPECTRO_INTEGRATION_TIME_LOOP doit être compris entre 1 et 255 (ATINTTIME)");
+              "SPECTRO_INTEGRATION_TIME_LOOP doit être compris entre 1 et 255");
+static_assert(SPECTRO_GAIN >= 0 && SPECTRO_GAIN <= 3,
+              "SPECTRO_GAIN doit valoir 0 (1x), 1 (3.7x), 2 (16x) ou 3 (64x)");
 static constexpr int SPECTRO_INTEGRATION_TIME_MS = (SPECTRO_INTEGRATION_TIME_LOOP * 28 + 9) / 10;
 static constexpr int SPECTRO_MEASUREMENT_MS      = 2 * SPECTRO_INTEGRATION_TIME_MS;
-// Timeout de réponse à ATCDATA : une mesure complète + marge, au moins 500 ms
+// Attente de DATA_RDY : une mesure complète + marge, au moins 500 ms
 static constexpr uint32_t SPECTRO_RESPONSE_TIMEOUT_MS =
     (SPECTRO_MEASUREMENT_MS + 200 > 500) ? (SPECTRO_MEASUREMENT_MS + 200) : 500;
-// Timeout des commandes de contrôle (AT, ATINTTIME)
-static constexpr uint32_t SPECTRO_AT_TIMEOUT_MS = 500;
 
-// État du capteur (lu par la tâche Health pour le bloc STATUS)
-static as7265x_status_t status = {};
+static const char* gain_name(int g) {
+    switch (g) {
+        case 0: return "1x";
+        case 1: return "3.7x";
+        case 2: return "16x";
+        default: return "64x";
+    }
+}
+
+// Un capteur par bus : [SPECTRO_REFLECTED] sur Wire, [SPECTRO_INCIDENT] sur Wire1.
+// Chaque instance n'est manipulée que par sa propre tâche d'acquisition.
+static as7265x_t sensors[SPECTRO_COUNT] = {};
 
 // ============================================================
 // Suivi des échecs : un seul ERROR à l'apparition du problème,
 // puis un rappel limité en fréquence, puis un INFO au retour.
 // ============================================================
-static void report_failure(const char* reason) {
-    status.consecutive_failures++;
-    if (status.consecutive_failures == 1) {
-        LOG_ERROR("[AS7265X] %s", reason);
+static void report_failure(as7265x_t& d, const char* reason) {
+    as7265x_status_t& s = d.status;
+    s.consecutive_failures++;
+    if (s.consecutive_failures == 1) {
+        LOG_ERROR("[%s] %s (%s)", d.name, reason, d.last_error ? d.last_error : "?");
     } else {
         LOG_THROTTLED(LOG_WARN, LOG_THROTTLE_MS,
-                      "[AS7265X] Toujours en échec : %s (%lu échecs consécutifs)",
-                      reason, (unsigned long)status.consecutive_failures);
+                      "[%s] Toujours en échec : %s (%s, %lu échecs consécutifs)",
+                      d.name, reason, d.last_error ? d.last_error : "?",
+                      (unsigned long)s.consecutive_failures);
+    }
+    // Le capteur a pu redémarrer (perte des réglages) : on reconfigure au prochain tour
+    s.config_ok = false;
+
+    if (s.consecutive_failures % BUS_RECOVERY_AFTER_FAILURES == 0) {
+        LOG_WARN("[%s] Réinitialisation du bus I2C", d.name);
+        d.wire->end();
+        d.wire->begin(d.sda, d.scl, d.freq);
     }
 }
 
-static void report_success() {
-    if (status.consecutive_failures > 0) {
-        LOG_INFO("[AS7265X] Capteur de nouveau opérationnel après %lu échecs",
-                 (unsigned long)status.consecutive_failures);
+static void report_success(as7265x_t& d) {
+    as7265x_status_t& s = d.status;
+    if (s.consecutive_failures > 0) {
+        LOG_INFO("[%s] Capteur de nouveau opérationnel après %lu échecs",
+                 d.name, (unsigned long)s.consecutive_failures);
     }
-    status.consecutive_failures = 0;
-    status.success_count++;
-    status.last_success_ms = millis();
+    s.consecutive_failures = 0;
+    s.success_count++;
+    s.last_success_ms = millis();
 }
 
-as7265x_status_t driver_as7265x_get_status() {
-    return status;
+as7265x_status_t driver_as7265x_get_status(spectro_source_t id) {
+    return sensors[id].status;
 }
 
 // ============================================================
-// Commandes AT
+// Accès I2C bas niveau
 // ============================================================
 
-// Vide le buffer de réception : une réponse arrivée en retard (après un
-// timeout) ne doit pas être lue comme la réponse à la commande suivante.
-static void flush_rx() {
-    size_t n = 0;
-    while (as7265_serial->available()) {
-        as7265_serial->read();
-        n++;
-    }
-    if (n > 0) {
-        LOG_DEBUG("[AS7265X] %u octets obsolètes purgés du buffer RX", (unsigned)n);
-    }
-}
-
-// Envoie une commande AT et lit la réponse jusqu'à "OK" ou "ERROR" (ou timeout).
-// Retourne true si la réponse contient "OK" sans "ERROR".
-static bool send_at_command(const char* cmd, String& response, uint32_t timeout_ms) {
-    flush_rx();
-    as7265_serial->println(cmd);
-
-    response = "";
-    uint32_t start = millis();
-    while (millis() - start < timeout_ms) {
-        while (as7265_serial->available()) {
-            response += (char)as7265_serial->read();
-        }
-        if (response.indexOf("OK") >= 0 || response.indexOf("ERROR") >= 0) break;
-        vTaskDelay(pdMS_TO_TICKS(5));
-    }
-    response.trim();
-    LOG_DEBUG("[AS7265X] %s -> \"%s\"", cmd, response.c_str());
-    return response.indexOf("OK") >= 0 && response.indexOf("ERROR") < 0;
-}
-
-// Envoie la configuration au capteur (ATINTTIME).
-// Les réglages AT ne sont pas conservés à la mise hors tension : on les
-// renvoie à chaque démarrage, et dès que le capteur répond s'il était absent.
-// `verbose` = false quand on retente en boucle (évite de spammer le moniteur).
-static bool apply_configuration(bool verbose) {
-    char cmd[24];
-    String resp;
-
-    snprintf(cmd, sizeof(cmd), "ATINTTIME=%d", SPECTRO_INTEGRATION_TIME_LOOP);
-    if (!send_at_command(cmd, resp, SPECTRO_AT_TIMEOUT_MS)) {
-        if (verbose) {
-            LOG_ERROR("[AS7265X] Commande %s refusée ou sans réponse (reçu : \"%s\")", cmd, resp.c_str());
-        }
-        status.config_ok = false;
+static bool phys_write(as7265x_t& d, uint8_t reg, uint8_t value) {
+    d.wire->beginTransmission(AS7265X_ADDR);
+    d.wire->write(reg);
+    d.wire->write(value);
+    if (d.wire->endTransmission() != 0) {
+        d.last_error = "pas d'ACK en écriture";
         return false;
     }
-
-    status.config_ok = true;
-    LOG_INFO("[AS7265X] Temps d'intégration : %d cycles (~%d ms), mesure complète ~%d ms (ATTCSMD=2 : 2 banques)",
-             SPECTRO_INTEGRATION_TIME_LOOP, SPECTRO_INTEGRATION_TIME_MS, SPECTRO_MEASUREMENT_MS);
     return true;
 }
 
-bool driver_as7265x_init(HardwareSerial& serial, int txPin, int rxPin, uint32_t baudrate) {
-    as7265_serial = &serial;
-    LOG_INFO("[AS7265X] Initialisation (UART %lu bauds, RX=%d, TX=%d)...",
-             (unsigned long)baudrate, rxPin, txPin);
-    serial.begin(baudrate, SERIAL_8N1, rxPin, txPin);
-    serial.setTimeout(200);
-
-    // Test de communication
-    String response;
-    if (!send_at_command("AT", response, SPECTRO_AT_TIMEOUT_MS)) {
-        status.init_ok = false;
-        LOG_ERROR("[AS7265X] Pas de réponse à la commande AT (reçu : \"%s\") : vérifier alimentation et câblage",
-                  response.c_str());
+static bool phys_read(as7265x_t& d, uint8_t reg, uint8_t& value) {
+    d.wire->beginTransmission(AS7265X_ADDR);
+    d.wire->write(reg);
+    if (d.wire->endTransmission() != 0) {
+        d.last_error = "pas d'ACK en lecture";
         return false;
     }
-    status.init_ok = true;
-    LOG_INFO("[AS7265X] Capteur détecté (réponse AT OK)");
-
-    // Configuration
-    return apply_configuration(true);
+    if (d.wire->requestFrom(AS7265X_ADDR, (uint8_t)1) != 1) {
+        d.last_error = "lecture I2C vide";
+        return false;
+    }
+    value = d.wire->read();
+    return true;
 }
 
-
-bool driver_as7265x_get_data() {
-    // Capteur absent au démarrage puis apparu (ou configuration refusée) :
-    // on (re)tente la configuration avant de lire des données.
-    if (!status.config_ok) {
-        if (!apply_configuration(false)) {
-            report_failure("Pas de réponse du capteur (configuration ATINTTIME impossible)");
+// Attend que (STATUS & mask) soit à l'état voulu.
+// Attente active courte (cas normal : quelques centaines de µs), puis on
+// rend la main à FreeRTOS si le capteur tarde.
+static bool wait_status(as7265x_t& d, uint8_t mask, bool want_set) {
+    uint32_t start = millis();
+    uint8_t st;
+    while (true) {
+        if (!phys_read(d, REG_STATUS, st)) return false;
+        if (((st & mask) != 0) == want_set) return true;
+        uint32_t elapsed = millis() - start;
+        if (elapsed > VREG_TIMEOUT_MS) {
+            d.last_error = (mask == STATUS_TX_VALID) ? "timeout TX_VALID" : "timeout RX_VALID";
             return false;
         }
+        if (elapsed >= 2) vTaskDelay(1);
+        else              delayMicroseconds(50);
     }
+}
 
-    LOG_DEBUG("[AS7265X] Envoi commande ATCDATA");
-    flush_rx();
-    as7265_serial->println("ATCDATA");
-    unsigned long startTime = millis();
+static bool vreg_write(as7265x_t& d, uint8_t vreg, uint8_t value) {
+    if (!wait_status(d, STATUS_TX_VALID, false)) return false;
+    if (!phys_write(d, REG_WRITE, vreg | 0x80)) return false;   // bit 7 = écriture
+    if (!wait_status(d, STATUS_TX_VALID, false)) return false;
+    return phys_write(d, REG_WRITE, value);
+}
 
-    // Wait for data with a timeout
-    while (!as7265_serial->available()) {
-        if (millis() - startTime > SPECTRO_RESPONSE_TIMEOUT_MS) {
-            report_failure("Pas de réponse du capteur à ATCDATA (timeout)");
-            return false;
-        }
-        vTaskDelay(pdMS_TO_TICKS(5)); // Small delay to avoid busy waiting
+static bool vreg_read(as7265x_t& d, uint8_t vreg, uint8_t& value) {
+    // Purge d'un éventuel octet resté dans READ_REG
+    uint8_t st;
+    if (!phys_read(d, REG_STATUS, st)) return false;
+    if (st & STATUS_RX_VALID) {
+        uint8_t dummy;
+        if (!phys_read(d, REG_READ, dummy)) return false;
     }
-    String dataAS = as7265_serial->readStringUntil('\n');
+    if (!wait_status(d, STATUS_TX_VALID, false)) return false;
+    if (!phys_write(d, REG_WRITE, vreg)) return false;
+    if (!wait_status(d, STATUS_RX_VALID, true)) return false;
+    return phys_read(d, REG_READ, value);
+}
 
-    if (dataAS.length() == 0) {
-        report_failure("Réponse vide");
+// Float IEEE 754 big-endian sur 4 registres virtuels consécutifs
+static bool vreg_read_float(as7265x_t& d, uint8_t vreg, float& out) {
+    uint32_t raw = 0;
+    for (uint8_t i = 0; i < 4; i++) {
+        uint8_t b;
+        if (!vreg_read(d, vreg + i, b)) return false;
+        raw = (raw << 8) | b;
+    }
+    memcpy(&out, &raw, sizeof(out));
+    return true;
+}
+
+// ============================================================
+// Fonctions capteur
+// ============================================================
+
+// ACK à 0x49 + présence des deux esclaves (VIS et UV) derrière le maître NIR
+static bool detect(as7265x_t& d) {
+    d.wire->beginTransmission(AS7265X_ADDR);
+    if (d.wire->endTransmission() != 0) {
+        d.last_error = "aucun ACK à l'adresse 0x49";
+        return false;
+    }
+    uint8_t dev;
+    if (!vreg_read(d, VREG_DEV_SELECT, dev)) return false;
+    if ((dev & DEV_SLAVES_MASK) != DEV_SLAVES_MASK) {
+        d.last_error = "esclaves AS72652/AS72653 non détectés";
+        return false;
+    }
+    d.status.init_ok = true;
+    return true;
+}
+
+// Les réglages ne sont pas conservés à la mise hors tension : on les
+// renvoie au démarrage et après chaque échec.
+// `verbose` = false quand on retente en boucle (évite de spammer le moniteur).
+static bool apply_configuration(as7265x_t& d, bool verbose) {
+    d.status.config_ok = false;
+    if (!detect(d)) {
+        if (verbose) LOG_ERROR("[%s] Capteur non détecté : %s", d.name, d.last_error);
         return false;
     }
 
-    LOG_DEBUG("[AS7265X] Données brutes : %s", dataAS.c_str());
+    uint8_t cfg;
+    bool ok = vreg_write(d, VREG_INT_TIME, SPECTRO_INTEGRATION_TIME_LOOP)
+           && vreg_read(d, VREG_CONFIG, cfg);
+    if (ok) {
+        cfg = (cfg & ~CFG_GAIN_MASK) | (SPECTRO_GAIN << CFG_GAIN_SHIFT);
+        ok = vreg_write(d, VREG_CONFIG, cfg);
+    }
+    if (!ok) {
+        if (verbose) LOG_ERROR("[%s] Configuration refusée : %s", d.name, d.last_error);
+        return false;
+    }
 
-    // Clean up the string and parse the data
-    dataAS.trim();
-    dataAS.replace("OK", "");
-    dataAS.replace(" ", "");
+    d.status.config_ok = true;
+    if (verbose) {
+        LOG_INFO("[%s] Intégration %d cycles (~%d ms), mesure complète ~%d ms, gain %s",
+                 d.name, SPECTRO_INTEGRATION_TIME_LOOP, SPECTRO_INTEGRATION_TIME_MS,
+                 SPECTRO_MEASUREMENT_MS, gain_name(SPECTRO_GAIN));
+    }
+    return true;
+}
 
-    // Parsing dans une variable locale : une trame incomplète
-    // ne laisse pas de valeurs partielles dans spectro_msg.
-    spectro_sample_t sample = {};
-    float* bands[] = {
-        &sample.R, &sample.S, &sample.T, &sample.U, &sample.V, &sample.W,
-        &sample.G, &sample.H, &sample.I, &sample.J, &sample.K, &sample.L,
-        &sample.A, &sample.B, &sample.C, &sample.D, &sample.E, &sample.F
+// Déclenche une mesure 6 canaux "one shot" sur les 3 puces.
+static bool start_measurement(as7265x_t& d) {
+    uint8_t cfg;
+    if (!vreg_read(d, VREG_CONFIG, cfg)) return false;
+    cfg &= ~CFG_DATA_RDY;
+    cfg = (cfg & ~CFG_MODE_MASK) | (MODE_6CH_ONE_SHOT << CFG_MODE_SHIFT);
+    return vreg_write(d, VREG_CONFIG, cfg);
+}
+
+static bool wait_data_ready(as7265x_t& d) {
+    uint32_t start = millis();
+    while (true) {
+        uint8_t cfg;
+        if (!vreg_read(d, VREG_CONFIG, cfg)) return false;
+        if (cfg & CFG_DATA_RDY) return true;
+        if (millis() - start > SPECTRO_RESPONSE_TIMEOUT_MS) {
+            d.last_error = "DATA_RDY jamais levé";
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+// Lit les 18 valeurs calibrées (float) dans l'ordre de spectro_sample_t
+static bool read_calibrated(as7265x_t& d, spectro_sample_t& s) {
+    struct { uint8_t dev; float* ch[6]; } chips[] = {
+        { DEV_NIR, { &s.R, &s.S, &s.T, &s.U, &s.V, &s.W } },
+        { DEV_VIS, { &s.G, &s.H, &s.I, &s.J, &s.K, &s.L } },
+        { DEV_UV,  { &s.A, &s.B, &s.C, &s.D, &s.E, &s.F } },
     };
-    const size_t nb_bands = sizeof(bands) / sizeof(bands[0]);
-
-    size_t parsed = 0;
-    char* token = strtok((char*)dataAS.c_str(), ",");
-    while (token != NULL && parsed < nb_bands) {
-        *bands[parsed++] = atof(token);
-        token = strtok(NULL, ",");
+    for (auto& chip : chips) {
+        if (!vreg_write(d, VREG_DEV_SELECT, chip.dev)) return false;
+        for (uint8_t i = 0; i < 6; i++) {
+            if (!vreg_read_float(d, VREG_CAL_FIRST + 4 * i, *chip.ch[i])) return false;
+        }
     }
+    return true;
+}
 
-    if (parsed < nb_bands) {
-        LOG_DEBUG("[AS7265X] Trame incomplète : %u/%u bandes", (unsigned)parsed, (unsigned)nb_bands);
-        report_failure("Trame incomplète");
+// ============================================================
+// API utilisée par les tâches
+// ============================================================
+
+bool driver_as7265x_init(spectro_source_t id, const char* name, TwoWire& wire,
+                         int sdaPin, int sclPin, uint32_t freq) {
+    as7265x_t& sensor = sensors[id];
+    sensor.name = name;
+    sensor.wire = &wire;
+    sensor.sda  = sdaPin;
+    sensor.scl  = sclPin;
+    sensor.freq = freq;
+
+    LOG_INFO("[%s] Initialisation (I2C %lu Hz, SDA=%d, SCL=%d)...",
+             sensor.name, (unsigned long)freq, sdaPin, sclPin);
+    if (!wire.begin(sdaPin, sclPin, freq)) {
+        LOG_ERROR("[%s] Impossible de démarrer le bus I2C", sensor.name);
         return false;
     }
+    wire.setTimeOut(50);
 
-    sample.ts_ms = millis(); // Timestamp the sample
-    sample.label = get_button_label();
-    spectro_msg  = sample;
-    report_success();
+    if (!apply_configuration(sensor, true)) return false;
+    LOG_INFO("[%s] Capteur détecté et configuré", sensor.name);
+    return true;
+}
 
-    // Send the parsed data to the queue
-    if (xQueueSend(QueueSpectro, &spectro_msg, 0) == pdTRUE) {
-        LOG_DEBUG("[AS7265X] Échantillon -> QueueSpectro (ts=%lu ms, A=%.2f)",
-                  (unsigned long)spectro_msg.ts_ms, spectro_msg.A);
-        return true;
+bool driver_as7265x_measure(spectro_source_t id, spectro_sample_t& out) {
+    as7265x_t& d = sensors[id];
+    if (d.wire == nullptr) return false; // driver_as7265x_init() jamais appelé
+
+    // Capteur absent au démarrage puis apparu (ou échec précédent) :
+    // on (re)tente la détection et la configuration avant de mesurer.
+    if (!d.status.config_ok) {
+        if (!apply_configuration(d, false)) {
+            report_failure(d, "Capteur non détecté ou configuration impossible");
+            return false;
+        }
     }
 
-    LOG_THROTTLED(LOG_WARN, LOG_THROTTLE_MS, "[AS7265X] QueueSpectro pleine : échantillon perdu");
-    return false;
+    uint32_t t_start = millis();
+    if (!start_measurement(d)) {
+        report_failure(d, "Déclenchement de la mesure impossible");
+        return false;
+    }
+    if (!wait_data_ready(d)) {
+        report_failure(d, "Pas de données (timeout mesure)");
+        return false;
+    }
+    uint32_t t_ready = millis();
+
+    // Parsing dans une variable locale : une lecture interrompue
+    // ne laisse pas de valeurs partielles dans `out`.
+    spectro_sample_t sample = {};
+    if (!read_calibrated(d, sample)) {
+        report_failure(d, "Lecture des valeurs calibrées interrompue");
+        return false;
+    }
+    uint32_t t_end = millis();
+
+    d.status.last_measure_ms = t_ready - t_start;
+    d.status.last_read_ms    = t_end - t_ready;
+    LOG_DEBUG("[%s] Mesure %lu ms + lecture I2C %lu ms",
+              d.name, (unsigned long)d.status.last_measure_ms, (unsigned long)d.status.last_read_ms);
+
+    sample.ts_ms  = t_ready; // horodatage = fin de l'intégration (données prêtes)
+    sample.source = id;
+    out = sample;
+    report_success(d);
+    return true;
 }

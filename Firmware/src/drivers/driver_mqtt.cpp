@@ -119,6 +119,45 @@ void setup_mqtt(const char* mqtt_server, const char* mqtt_user, const char* mqtt
   // Il sera appelé quand WiFi obtiendra une IP (dans util.cpp)
 }
 
+static mqtt_send_result_t publish_json(JsonDocument &doc, const fused_message_t &msg, const char* what);
+
+static const char* msg_type_name(msg_type_t type) {
+    switch (type) {
+        case MSG_TYPE_HEARTBEAT: return "heartbeat";
+        case MSG_TYPE_INCIDENT:  return "incident";
+        default:                 return "fused";
+    }
+}
+
+// Bloc spectro, identique pour les deux capteurs.
+// Côté serveur, le capteur est identifié par la clé du bloc
+// ("spectro" = réfléchi, "spectro_incident" = incident) et par le champ "source".
+static void add_spectro_block(JsonObject root, const spectro_sample_t &s) {
+    const bool incident = (s.source == SPECTRO_INCIDENT);
+    JsonObject spectro = root.createNestedObject(incident ? "spectro_incident" : "spectro");
+    spectro["source"] = incident ? "incident" : "reflected";
+    spectro["ts_ms"] = s.ts_ms;
+    spectro["label"] = s.label;
+    spectro["R"] = s.R;
+    spectro["S"] = s.S;
+    spectro["T"] = s.T;
+    spectro["U"] = s.U;
+    spectro["V"] = s.V;
+    spectro["W"] = s.W;
+    spectro["G"] = s.G;
+    spectro["H"] = s.H;
+    spectro["I"] = s.I;
+    spectro["J"] = s.J;
+    spectro["K"] = s.K;
+    spectro["L"] = s.L;
+    spectro["A"] = s.A;
+    spectro["B"] = s.B;
+    spectro["C"] = s.C;
+    spectro["D"] = s.D;
+    spectro["E"] = s.E;
+    spectro["F"] = s.F;
+}
+
 // Déclaration de la fonction qui sera appelée dans le loop ou par une autre tâche
 mqtt_send_result_t prepare_and_send_mqtt_message(const fused_message_t &msg) {
     // Le buffer JSON doit être suffisamment grand pour tout le contenu.
@@ -126,21 +165,29 @@ mqtt_send_result_t prepare_and_send_mqtt_message(const fused_message_t &msg) {
     StaticJsonDocument<1024> doc;
     JsonObject root = doc.to<JsonObject>();
     const bool is_heartbeat = (msg.msg_type == MSG_TYPE_HEARTBEAT);
+    const bool is_incident  = (msg.msg_type == MSG_TYPE_INCIDENT);
 
     // Identité / meta
     root["sensor_id"] = BBSOCOUL_ID;
-    root["type"] = is_heartbeat ? "heartbeat" : "fused";
+    root["type"] = msg_type_name(msg.msg_type);
     root["ts"] = msg.ts_ms;
-    root["delta_gnss_spectro_ms"] = msg.delta_time_gnss_spectro_ms;
     root["message_id"] = msg.message_id;
-    root["gnss_valid"] = msg.gnss_valid;
-    root["spectro_valid"] = msg.spectro_valid;
 
     // Diagnostic de la liaison (utile pour tester la transmission)
     JsonObject diag = root.createNestedObject("diag");
     diag["uptime_ms"] = millis();
     diag["rssi"] = WiFi.RSSI();
     diag["free_heap"] = ESP.getFreeHeap();
+
+    if (is_incident) {
+        // Message spectro incident : pas de bloc GNSS
+        add_spectro_block(root, msg.spectro);
+        return publish_json(doc, msg, "Spectro incident");
+    }
+
+    root["delta_gnss_spectro_ms"] = msg.delta_time_gnss_spectro_ms;
+    root["gnss_valid"] = msg.gnss_valid;
+    root["spectro_valid"] = msg.spectro_valid;
 
     // GNSS group
     JsonObject gnss = root.createNestedObject("gnss");
@@ -163,28 +210,15 @@ mqtt_send_result_t prepare_and_send_mqtt_message(const fused_message_t &msg) {
     gnss_date["sec"] = msg.gnss.sec;
     gnss_date["ms"] = msg.gnss.ms;
 
-    // Spectro group
-    JsonObject spectro = root.createNestedObject("spectro");
-    spectro["ts_ms"] = msg.spectro.ts_ms;
-    spectro["label"] = msg.spectro.label;
-    spectro["R"] = msg.spectro.R;
-    spectro["S"] = msg.spectro.S;
-    spectro["T"] = msg.spectro.T;
-    spectro["U"] = msg.spectro.U;
-    spectro["V"] = msg.spectro.V;
-    spectro["W"] = msg.spectro.W;
-    spectro["G"] = msg.spectro.G;
-    spectro["H"] = msg.spectro.H;
-    spectro["I"] = msg.spectro.I;
-    spectro["J"] = msg.spectro.J;
-    spectro["K"] = msg.spectro.K;
-    spectro["L"] = msg.spectro.L;
-    spectro["A"] = msg.spectro.A;
-    spectro["B"] = msg.spectro.B;
-    spectro["C"] = msg.spectro.C;
-    spectro["D"] = msg.spectro.D;
-    spectro["E"] = msg.spectro.E;
-    spectro["F"] = msg.spectro.F;
+    // Spectro group (capteur réfléchi)
+    add_spectro_block(root, msg.spectro);
+
+    return publish_json(doc, msg, is_heartbeat ? "Heartbeat" : "Message fusionné");
+}
+
+// Sérialise et publie le document JSON d'un message
+static mqtt_send_result_t publish_json(JsonDocument &doc, const fused_message_t &msg, const char* what) {
+    const bool is_heartbeat = (msg.msg_type == MSG_TYPE_HEARTBEAT);
 
     // Sérialiser
     char payload[1024];
@@ -216,8 +250,7 @@ mqtt_send_result_t prepare_and_send_mqtt_message(const fused_message_t &msg) {
     uint16_t packetId = mqttClient.publish(MQTT_OUTPUT, 1, false, payload, len);
     if (packetId > 0) {
         LOG_DEBUG("[MQTT] %s #%lu publié (%u octets, packetId %u)",
-                  is_heartbeat ? "Heartbeat" : "Message fusionné",
-                  (unsigned long)msg.message_id, (unsigned)len, packetId);
+                  what, (unsigned long)msg.message_id, (unsigned)len, packetId);
         return MQTT_SEND_OK;
     }
 
