@@ -33,12 +33,12 @@ Ce tutoriel vous permet d'assembler tous les composants pour obtenir un Végém�
 | # | Composant | Qté | Fournisseur | Remarque |
 |---|---|---|---|---|
 | 1 | Lilygo T-PCIE v1.2 (AXP2101, ESP32-WROVER 16 Mo) | 1 | [TinyTronics](https://www.tinytronics.nl/nl/development-boards/microcontroller-boards/met-wi-fi/lilygo-t-pcie-v1.2-axp2101-esp32-wrover-16mb) | Carte mère : ESP32 + slot mini PCIe |
-| 2 | Récepteur GNSS RTK u-blox ZED-F9P au format mini PCIe (ex-Drotek **DP0602**) | 1 | [Siderion – récepteurs GNSS](https://siderion.io/collections/gnss-receivers) · [ancienne fiche Drotek DP0602](https://store-drotek.com/923-DP0602.html) | ⚠️ La DP0602 est annoncée en fin de vie et n'apparaît pas au catalogue Siderion. Vérifier la disponibilité ou un équivalent mPCIe auprès de Siderion |
+| 2 | Récepteur GNSS RTK u-blox ZED-F9P au format mini PCIe (ex-Drotek **DP0602**) | 1 | [Drotek](https://store-drotek.com/923-DP0602.html) | ⚠️ La DP0602 est annoncée en fin de vie et n'apparaît pas au catalogue Siderion. Dans une prochaine version, remplacer par [UM980 chez GNSS Store](https://gnss.store/products/elt0226) |
 | 3 | Antenne GNSS multibande L1/L2 Siderion **SA233** (ex-Drotek DA233) | 1 | [Siderion – SA233](https://siderion.io/products/sa233-multiband-rtk-gnss-antenna) | [Documentation](https://siderion.gitbook.io/siderion-docs/KDjA5svYRpvM3ouQSdFC/antenna/sa233) · [Datasheet](https://siderion-sas.github.io/SiderionDocs/SiderionDocs_SA233.pdf) |
 | 4 | Câble d'antenne U.FL → SMA femelle | 1 | [TinyTronics](https://www.tinytronics.nl/en/cables-and-connectors/cables-and-adapters/others/sma-female-to-ufl-female-cable) · [alternative MHZshop](https://www.mhzshop.com/shop/Cables-et-cordons/Cordons-Radio/SMA/Cordon-UFL-vers-SMA-Femelle-chassis-12-cm-1-37mm-Embase-SMA-hexagonale-11mm.html) | Relie la F9P à l'embase SMA du boîtier |
 | 5 | Capteur spectral SparkFun Triad AS7265x (SEN-15050) | 1 | [Digikey](https://www.digikey.fr/fr/products/detail/sparkfun-electronics/SEN-15050/9739876) | 18 bandes (410 → 940 nm) |
 | 6 | Port USB-C femelle vers DIP (à souder) | 1 | [TinyTronics](https://www.tinytronics.nl/nl/kabels-en-connectoren/connectoren/usb/usb-c-2.0-female-naar-dip-adapter) | Alimentation depuis l'extérieur du boîtier |
-| 7 | Batterie Li-Po 3,7 V 2000 mAh | 1 | [TinyTronics](https://www.tinytronics.nl/nl/power/batterijen/li-po/li-po-accu-3.7v-2000mah) | Référence à vérifier |
+| 7 | Batterie Li-Po 3,7 V 2000 mAh | 1 | [TinyTronics](https://www.tinytronics.nl/nl/power/batterijen/li-po/li-po-accu-3.7v-2000mah) | Il semble que la Lilygo TPCIE n'arrive pas à charger ces batteries, on préfère alimenter le device avec une powerbank |
 | 8 | Interrupteur 3 positions (bouton de labellisation) | 1 | *Référence à trouver* | Positions 0 / 1 / 2 |
 | 9 | Interrupteur 2 positions (envoi des données) | 1 | *Référence à trouver* | |
 | 10 | Broches mâles au pas de 2,54 mm | — | *Référence à trouver* | Non fournies avec le port USB-C |
@@ -62,9 +62,11 @@ Les fichiers d'impression sont dans le dossier [STL/](STL/).
 
 | Fichier | Pièce | Qté | Remarque |
 |---|---|---|---|
-| *à compléter* | | | |
+| [Boitier_Vegemetre_RTK.stl](STL/Boitier_Vegemetre_RTK.stl) |Boitier piéton | 1| Fixation de la Lilygo, des interrupteurs, de l'antenne et du Sparkfun AS7265|
+| [Boitier_Embarque_Vegemetre_RTK.stl](STL/Boitier_Embarque_Vegemetre_RTK.stl) |Boitier embarqué | 1| Idem avec deux fixations permettent de visser des aimants ou des boulons|
+| [Couvercle_Vegemetre_RTK.stl](STL/Couvercle_Vegemetre_RTK.stl) |Couvercle clipsable  | 1| |
 
-Paramètres d'impression conseillés : *à compléter (matériau, remplissage, hauteur de couche, supports).*
+Imprimé jusqu'à présent en PLA, 20%
 
 📷 *Photo à ajouter : les pièces imprimées — `media/02_boitier_imprime.jpg`*
 <!-- <img src="media/02_boitier_imprime.jpg" alt="Pièces du boîtier imprimées" style="width: 60%; height: auto;" /> -->
@@ -113,7 +115,7 @@ Les broches sont définies dans [Firmware/src/common/config.exemple.h](../Firmwa
 | AS7265x – RX de l'ESP32 (vers TX du capteur) | 13 | UART 115200 bauds |
 | AS7265x – TX de l'ESP32 (vers RX du capteur) | 15 | |
 | AS7265x – alimentation | 3V3 / GND | |
-| Interrupteur « envoi des données » | 34 | Contact vers GND. ⚠️ Le GPIO 34 n'a pas de pull-up interne : vérifier la présence d'une résistance de tirage vers 3V3 |
+| Interrupteur « envoi des données » | 34 | Contact vers GND. ⚠️ Le GPIO 34 n'a pas de pull-up interne l'interrupteur fait donc un contact vers le GND ou le VCC. A remplacer par GPIO 4, 18, 19 ou 23 |
 | Interrupteur de labellisation – position 1 | 32 | Contact vers GND (pull-up interne) |
 | Interrupteur de labellisation – position 2 | 33 | Contact vers GND (pull-up interne) |
 | F9P – UART (via mPCIe) | 26 (TX) / 27 (RX) | Aucun câblage, 460800 bauds |
